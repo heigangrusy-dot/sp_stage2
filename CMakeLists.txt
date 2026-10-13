@@ -50,7 +50,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     applications/imu_task.cpp
     applications/remote_task.cpp
     applications/linkage_task.cpp
-    applications/chassis_config.cpp
     sp_middleware/io/led/led.cpp
     sp_middleware/io/buzzer/buzzer.cpp
     sp_middleware/io/bmi088/bmi088.cpp
@@ -61,6 +60,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     sp_middleware/motor/rm_motor/rm_motor.cpp
     sp_middleware/tools/pid/pid.cpp
     sp_middleware/tools/math_tools/math_tools.cpp
+    sp_middleware/tools/mecanum/mecanum.cpp
 
 )
 

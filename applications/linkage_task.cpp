@@ -9,8 +9,8 @@
 
 namespace
 {
-// 调试时可置 false 单独跑非 CAN 功能
-constexpr bool ENABLE_CAN = true;
+// 第二阶段准备期间停用第一阶段联动业务。
+constexpr bool ENABLE_CAN = false;
 
 constexpr float K_RATIO_DOWN = 0.5f;  // 左拨杆下
 constexpr float K_RATIO_MID = -1.0f;  // 左拨杆中

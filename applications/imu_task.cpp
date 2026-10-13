@@ -5,7 +5,7 @@
 
 namespace
 {
-constexpr float R_AB[3][3] = {{0.0f, -1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
+constexpr float R_AB[3][3] = {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
 }  // namespace
 
 //C板板载 BMI088

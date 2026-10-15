@@ -1,7 +1,9 @@
 #include "FreeRTOS.h"
 #include "chassis_config.hpp"
 #include "cmsis_os.h"
+#include "control_safety.hpp"
 #include "io/can/can.hpp"
+#include "io/dbus/dbus.hpp"
 #include "io/plotter/plotter.hpp"
 #include "motor/rm_motor/rm_motor.hpp"
 #include "task.h"
@@ -17,16 +19,24 @@ sp::RM_Motor motor_right_rear(4, sp::RM_Motors::M3508, chassis_config::GEAR_RATI
 }  // namespace
 
 extern sp::Plotter plotter;
+extern sp::DBus remote;
 
 extern "C" void chassis_task(void const * argument)
 {
   (void)argument;
+
+  // 记住是否观察过下档
+  control::ControlSafety safety;
 
   chassis_can.config();
   chassis_can.start();
 
   while (true) {
     float values[10] = {};
+
+    // 默认认为遥控无效、拨杆下档
+    bool remote_valid = false;
+    sp::DBusSwitchMode right_switch = sp::DBusSwitchMode::DOWN;
 
     taskENTER_CRITICAL();
     const auto now_ms = osKernelSysTick();
@@ -39,9 +49,36 @@ extern "C" void chassis_task(void const * argument)
     values[6] = motor_right_front.is_alive(now_ms) ? 1.0f : 0.0f;
     values[7] = motor_right_rear.is_alive(now_ms) ? 1.0f : 0.0f;
 
+    remote_valid = remote.is_alive(now_ms);
+    if (remote_valid) {
+      right_switch = remote.sw_r;
+    }
+
     taskEXIT_CRITICAL();
-    values[8] = static_cast<float>(HAL_CAN_GetState(&hcan1));
-    values[9] = static_cast<float>(HAL_CAN_GetError(&hcan1));
+
+    const bool motors_ready =
+      values[4] == 1.0f && values[5] == 1.0f && values[6] == 1.0f && values[7] == 1.0f;
+    const bool can_ready = HAL_CAN_GetState(&hcan1) == HAL_CAN_STATE_LISTENING &&
+                           HAL_CAN_GetError(&hcan1) == HAL_CAN_ERROR_NONE;
+    const bool system_ready = motors_ready && can_ready;
+
+    const bool switch_down = right_switch == sp::DBusSwitchMode::DOWN;
+    const bool motion_requested = right_switch == sp::DBusSwitchMode::MID;
+    const bool enabled = safety.update(remote_valid, switch_down, motion_requested, system_ready);
+
+    values[8] = remote_valid ? 1.0f : 0.0f;
+    values[9] = enabled ? 1.0f : 0.0f;
+
+    // 设置四台电机的目标转矩为0 N·m。
+    motor_right_front.cmd(0.0f);
+    motor_left_front.cmd(0.0f);
+    motor_left_rear.cmd(0.0f);
+    motor_right_rear.cmd(0.0f);
+    motor_right_front.write(chassis_can.tx_data);
+    motor_left_front.write(chassis_can.tx_data);
+    motor_left_rear.write(chassis_can.tx_data);
+    motor_right_rear.write(chassis_can.tx_data);
+    chassis_can.send(motor_right_front.tx_id);
 
     plotter.plot(
       values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7],

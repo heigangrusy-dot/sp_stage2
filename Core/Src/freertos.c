@@ -51,8 +51,8 @@ osThreadId defaultTaskHandle;
 osThreadId LedTaskHandle;
 osThreadId BuzzerTaskHandle;
 osThreadId ImuTaskHandle;
-osThreadId LinkageTaskHandle;
 osThreadId RemoteTaskHandle;
+osThreadId ChassisTaskHandle;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -63,8 +63,8 @@ void StartDefaultTask(void const * argument);
 extern void led_task(void const * argument);
 extern void buzzer_task(void const * argument);
 extern void imu_task(void const * argument);
-extern void linkage_task(void const * argument);
 extern void remote_task(void const * argument);
+extern void chassis_task(void const * argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -127,13 +127,13 @@ void MX_FREERTOS_Init(void) {
   osThreadDef(ImuTask, imu_task, osPriorityNormal, 0, 256);
   ImuTaskHandle = osThreadCreate(osThread(ImuTask), NULL);
 
-  /* definition and creation of LinkageTask */
-  osThreadDef(LinkageTask, linkage_task, osPriorityNormal, 0, 256);
-  LinkageTaskHandle = osThreadCreate(osThread(LinkageTask), NULL);
-
   /* definition and creation of RemoteTask */
   osThreadDef(RemoteTask, remote_task, osPriorityNormal, 0, 128);
   RemoteTaskHandle = osThreadCreate(osThread(RemoteTask), NULL);
+
+  /* definition and creation of ChassisTask */
+  osThreadDef(ChassisTask, chassis_task, osPriorityNormal, 0, 256);
+  ChassisTaskHandle = osThreadCreate(osThread(ChassisTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */

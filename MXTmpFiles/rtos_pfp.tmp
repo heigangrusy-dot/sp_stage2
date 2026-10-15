@@ -1,0 +1,6 @@
+void StartDefaultTask(void const * argument);
+extern void led_task(void const * argument);
+extern void buzzer_task(void const * argument);
+extern void imu_task(void const * argument);
+extern void remote_task(void const * argument);
+extern void chassis_task(void const * argument);#n

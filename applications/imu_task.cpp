@@ -26,9 +26,9 @@ extern "C" void imu_task(void const * argument)
     imu.update(bmi088.acc, bmi088.gyro);
 
     // 顺序：加速度3轴 + 角速度3轴 + 温度 + 姿态角3个 = 10路
-    plotter.plot(
-      bmi088.acc[0], bmi088.acc[1], bmi088.acc[2], bmi088.gyro[0], bmi088.gyro[1], bmi088.gyro[2],
-      bmi088.temp, imu.roll, imu.pitch, imu.yaw);
+    //plotter.plot(
+    //bmi088.acc[0], bmi088.acc[1], bmi088.acc[2], bmi088.gyro[0], bmi088.gyro[1], bmi088.gyro[2],
+    //bmi088.temp, imu.roll, imu.pitch, imu.yaw);
 
     osDelay(1);
   }

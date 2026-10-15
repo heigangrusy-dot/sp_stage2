@@ -49,11 +49,25 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     application/buzzer_task.cpp
     application/control_task.cpp
     application/laser_task.cpp
+    application/imu_task.cpp
+    application/uart_task.cpp
+    application/plotter_task.cpp
+    application/trajectory_task.cpp
+
+    sp_middleware/io/led/led.cpp
+    sp_middleware/io/buzzer/buzzer.cpp
+    sp_middleware/io/bmi088/bmi088.cpp
+
+    sp_middleware/tools/math_tools/math_tools.cpp    #用PID要加这个源代码的链接
+    sp_middleware/tools/mahony/mahony.cpp
+    sp_middleware/tools/pid/pid.cpp
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
+    sp_middleware/
+    application/
 )
 
 # Add project symbols (macros)
@@ -67,7 +81,6 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
-    sp_middleware
 
     # Add user defined libraries
 )

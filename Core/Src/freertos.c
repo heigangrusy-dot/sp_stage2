@@ -51,9 +51,11 @@ osThreadId defaultTaskHandle;
 osThreadId ledTaskHandle;
 osThreadId buzzerTaskHandle;
 osThreadId uartTaskHandle;
-osThreadId dbusTaskHandle;
 osThreadId imuTaskHandle;
 osThreadId controlTaskHandle;
+osThreadId laserTaskHandle;
+osThreadId plotter_TaskHandle;
+osThreadId trajectoryTaskHandle;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -64,9 +66,11 @@ void StartDefaultTask(void const * argument);
 extern void led_task(void const * argument);
 extern void buzzer_task(void const * argument);
 extern void uart_task(void const * argument);
-extern void dbus_task(void const * argument);
 extern void imu_task(void const * argument);
 extern void control_task(void const * argument);
+extern void laser_task(void const * argument);
+extern void plotter_task(void const * argument);
+extern void trajectory_task(void const * argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -126,12 +130,8 @@ void MX_FREERTOS_Init(void) {
   buzzerTaskHandle = osThreadCreate(osThread(buzzerTask), NULL);
 
   /* definition and creation of uartTask */
-  osThreadDef(uartTask, uart_task, osPriorityLow, 0, 128);
+  osThreadDef(uartTask, uart_task, osPriorityAboveNormal, 0, 256);
   uartTaskHandle = osThreadCreate(osThread(uartTask), NULL);
-
-  /* definition and creation of dbusTask */
-  osThreadDef(dbusTask, dbus_task, osPriorityNormal, 0, 256);
-  dbusTaskHandle = osThreadCreate(osThread(dbusTask), NULL);
 
   /* definition and creation of imuTask */
   osThreadDef(imuTask, imu_task, osPriorityNormal, 0, 256);
@@ -140,6 +140,18 @@ void MX_FREERTOS_Init(void) {
   /* definition and creation of controlTask */
   osThreadDef(controlTask, control_task, osPriorityNormal, 0, 1024);
   controlTaskHandle = osThreadCreate(osThread(controlTask), NULL);
+
+  /* definition and creation of laserTask */
+  osThreadDef(laserTask, laser_task, osPriorityIdle, 0, 128);
+  laserTaskHandle = osThreadCreate(osThread(laserTask), NULL);
+
+  /* definition and creation of plotter_Task */
+  osThreadDef(plotter_Task, plotter_task, osPriorityIdle, 0, 128);
+  plotter_TaskHandle = osThreadCreate(osThread(plotter_Task), NULL);
+
+  /* definition and creation of trajectoryTask */
+  osThreadDef(trajectoryTask, trajectory_task, osPriorityIdle, 0, 128);
+  trajectoryTaskHandle = osThreadCreate(osThread(trajectoryTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */

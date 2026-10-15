@@ -1,6 +1,6 @@
 #include "cmsis_os.h"
 
-extern "C" void uart_task(void * argument)
+extern "C" void can_task(void * argument)
 {
   while (true) {
     osDelay(1);

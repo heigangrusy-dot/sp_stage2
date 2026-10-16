@@ -1,10 +1,9 @@
 #ifndef LASER_HPP
 #define LASER_HPP
-#include <cstdint>
-
+#include "cmsis_os.h"
 #include "usart.h"
 
-#define LASER_TX_BUFFER_SIZE 10  // 激光测距模块数据帧长度
+#define LASER_TX_BUFFER_SIZE 9  // 激光测距模块数据帧长度
 
 class Laser
 {
@@ -15,12 +14,12 @@ public:
   uint8_t temp;
   void config();
   void request();
-  void update();
+  void update(uint16_t size);
 
 private:
   UART_HandleTypeDef * huart_;
   uint8_t tx_buffer_[LASER_TX_BUFFER_SIZE];
-  uint16_t tx_buffer_size_ = sizeof(tx_buffer_);
+  uint16_t tx_buffer_size_ = LASER_TX_BUFFER_SIZE;
 };
 
 #endif  // LASER_HPP

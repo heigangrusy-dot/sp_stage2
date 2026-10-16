@@ -60,6 +60,8 @@ void TIM4_IRQHandler(void);
 void USART1_IRQHandler(void);
 void USART3_IRQHandler(void);
 void TIM5_IRQHandler(void);
+void CAN2_RX0_IRQHandler(void);
+void CAN2_RX1_IRQHandler(void);
 void USART6_IRQHandler(void);
 void I2C3_EV_IRQHandler(void);
 void I2C3_ER_IRQHandler(void);

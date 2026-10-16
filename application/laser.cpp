@@ -9,16 +9,19 @@ Laser::Laser(UART_HandleTypeDef * huart) : huart_(huart)
 
 void Laser::config()
 {
-  if (huart_->Init.BaudRate != 9600) {
-    huart_->Init.BaudRate = 9600;
-    HAL_UART_Init(huart_);
-  }
   uint8_t config_command1[4] = {0xA5, 0x76, 0x01, 0x1C};  // 将模块波特率切换到115200
+  uint8_t config_command2[4] = {0xA5, 0x65, 0x01, 0x0B};  // 将模块输出模式改为连续输出
+
+  huart_->Init.BaudRate = 9600;
+  HAL_UART_Init(huart_);
+  osDelay(50);
+
   HAL_UART_Transmit(huart_, config_command1, sizeof(config_command1), 1000);
 
   huart_->Init.BaudRate = 115200;
   HAL_UART_Init(huart_);
-  uint8_t config_command2[4] = {0xA5, 0x65, 0x01, 0x0B};  // 将模块输出模式改为连续输出
+  osDelay(50);
+
   HAL_UART_Transmit(huart_, config_command2, sizeof(config_command2), 1000);
 }
 
@@ -28,8 +31,10 @@ void Laser::request()
   return;
 }
 
-void Laser::update()
+void Laser::update(uint16_t size)
 {
+  if (size != tx_buffer_size_) return;
+
   uint8_t checksum = tx_buffer_[0] + tx_buffer_[1] + tx_buffer_[2] + tx_buffer_[3] + tx_buffer_[4] +
                      tx_buffer_[5] + tx_buffer_[6] + tx_buffer_[7];  //校验位
   if (tx_buffer_[0] != 0x5A || tx_buffer_[1] != 0x5A || tx_buffer_[8] != checksum) {

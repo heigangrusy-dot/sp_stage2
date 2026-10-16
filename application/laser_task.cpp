@@ -6,7 +6,6 @@ extern "C" void laser_task(void * argument)
 {
   laser.config();
   laser.request();
-  laser.update();
   while (true) {
     osDelay(10);
   }
@@ -16,6 +15,6 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef * huart, uint16_t Size)
 {
   if (huart == &huart6) {
     laser.request();
-    laser.update();
+    laser.update(Size);
   }
 }

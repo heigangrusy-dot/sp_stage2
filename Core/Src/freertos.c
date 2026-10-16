@@ -50,7 +50,6 @@
 osThreadId defaultTaskHandle;
 osThreadId ledTaskHandle;
 osThreadId buzzerTaskHandle;
-osThreadId canTaskHandle;
 osThreadId imuTaskHandle;
 osThreadId controlTaskHandle;
 osThreadId laserTaskHandle;
@@ -65,7 +64,6 @@ osThreadId trajectoryTaskHandle;
 void StartDefaultTask(void const * argument);
 extern void led_task(void const * argument);
 extern void buzzer_task(void const * argument);
-extern void can_task(void const * argument);
 extern void imu_task(void const * argument);
 extern void control_task(void const * argument);
 extern void laser_task(void const * argument);
@@ -128,10 +126,6 @@ void MX_FREERTOS_Init(void) {
   /* definition and creation of buzzerTask */
   osThreadDef(buzzerTask, buzzer_task, osPriorityLow, 0, 128);
   buzzerTaskHandle = osThreadCreate(osThread(buzzerTask), NULL);
-
-  /* definition and creation of canTask */
-  osThreadDef(canTask, can_task, osPriorityAboveNormal, 0, 256);
-  canTaskHandle = osThreadCreate(osThread(canTask), NULL);
 
   /* definition and creation of imuTask */
   osThreadDef(imuTask, imu_task, osPriorityNormal, 0, 256);

@@ -50,7 +50,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     application/control_task.cpp
     application/laser_task.cpp
     application/imu_task.cpp
-    application/can_task.cpp
     application/plotter_task.cpp
     application/trajectory_task.cpp
     application/laser.cpp    #自己写的源代码记得加，不然会报undefined

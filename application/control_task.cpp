@@ -20,7 +20,20 @@ extern sp::CAN can2;
 extern Laser laser;
 extern sp::DBusSwitchMode dbus_sw_r;
 
+constexpr uint32_t CONNECT_OFFLINE_MS = 50;
+constexpr float MOTOR3_NORMAL_RAD = -3.14159265f / 2.0f;  // -90°
+constexpr float MOTOR3_FOLD_RAD = -3.14159265f / 6.0f;    // -30°
+constexpr uint16_t FOLD_DISTANCE_CM = 40;                 //想一直处于初始状态则值调为大于200即可
+constexpr uint32_t FOLD_RESET_DELAY_MS = 1000;
+
+uint32_t connect_last_rx_ms = 0;
+bool arm_folded = false;
+bool arm_waiting_reset = false;
+uint32_t fold_exit_ms = 0;
+
 extern "C" void lose_power();
+extern "C" void drive_motor(float motor1_set, float motor2_set, float motor3_set);
+extern "C" void hold_arm();
 
 extern "C" void control_task(void * argument)
 {
@@ -31,34 +44,18 @@ extern "C" void control_task(void * argument)
   can2.start();
 
   while (1) {
+    if (osKernelSysTick() - connect_last_rx_ms > CONNECT_OFFLINE_MS) {
+      dbus_sw_r = sp::DBusSwitchMode::DOWN;
+    }
+
     switch (dbus_sw_r) {
-      case sp::DBusSwitchMode::DOWN:
+      case sp::DBusSwitchMode::DOWN:  //右拨杆下档，失能
+
         lose_power();
         break;
       case sp::DBusSwitchMode::MID:
-        if (laser.distance < 1000) {
-          motor1_pid_angle.clear();
-          motor2_pid_angle.clear();
-          motor3_pid_angle.clear();
-        }
-        motor1_pid_angle.calc(0.5f, motor1.angle);
-        motor2_pid_angle.calc(0.5f, motor2.angle);
-        motor3_pid_angle.calc(0.5f, motor3.angle);
-
-        motor1.cmd(motor1_pid_angle.out);
-        motor2.cmd(motor2_pid_angle.out);
-        motor3.cmd(motor3_pid_angle.out);
-
-        motor1.write(can1.tx_data);
-        motor2.write(can1.tx_data);
-        motor3.write(can2.tx_data);
-        can1.send(motor1.tx_id);
-        can2.send(motor3.tx_id);
-        break;
       case sp::DBusSwitchMode::UP:
-        motor1_pid_angle.clear();
-        motor2_pid_angle.clear();
-        motor3_pid_angle.clear();
+        hold_arm();
         break;
     }
 
@@ -81,6 +78,50 @@ extern "C" void lose_power()  //失能函数
   can2.send(motor3.tx_id);
 }
 
+extern "C" void drive_motor(float motor1_set, float motor2_set, float motor3_set)  //驱动电机函数
+{
+  motor1_pid_angle.calc(motor1_set, motor1.angle);
+  motor2_pid_angle.calc(motor2_set, motor2.angle);
+  motor3_pid_angle.calc(motor3_set, motor3.angle);
+
+  motor1.cmd(motor1_pid_angle.out);
+  motor2.cmd(motor2_pid_angle.out);
+  motor3.cmd(motor3_pid_angle.out);
+
+  motor1.write(can1.tx_data);
+  motor2.write(can1.tx_data);
+  motor3.write(can2.tx_data);
+  can1.send(motor1.tx_id);
+  can2.send(motor3.tx_id);
+}
+
+extern "C" void hold_arm()
+{
+  float motor3_set = MOTOR3_NORMAL_RAD;
+  uint32_t now_ms = osKernelSysTick();
+
+  if (laser.distance < FOLD_DISTANCE_CM) {
+    arm_folded = true;
+    arm_waiting_reset = false;
+    motor3_set = MOTOR3_FOLD_RAD;
+  }
+  else if (arm_folded) {
+    if (!arm_waiting_reset) {
+      arm_waiting_reset = true;
+      fold_exit_ms = now_ms;
+    }
+    if (now_ms - fold_exit_ms < FOLD_RESET_DELAY_MS) {
+      motor3_set = MOTOR3_FOLD_RAD;
+    }
+    else {
+      arm_folded = false;
+      arm_waiting_reset = false;
+    }
+  }
+
+  drive_motor(0.0f, 0.0f, motor3_set);
+}
+
 extern "C" void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef * hcan)  //CAN回调
 {
   auto stamp_ms = osKernelSysTick();
@@ -101,6 +142,7 @@ extern "C" void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef * hcan)  //C
         motor3.read(can2.rx_data, stamp_ms);
       else if (can2.rx_id == 0x111) {
         uint8_t raw = can2.rx_data[0];
+        connect_last_rx_ms = stamp_ms;
         dbus_sw_r = static_cast<sp::DBusSwitchMode>(raw);
       }
     }

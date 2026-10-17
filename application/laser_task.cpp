@@ -11,10 +11,17 @@ extern "C" void laser_task(void * argument)
   }
 }
 
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef * huart, uint16_t Size)
+extern "C" void HAL_UART_RxCpltCallback(UART_HandleTypeDef * huart)
+{
+  if (huart == &huart6) {
+    laser.update(LASER_TX_BUFFER_SIZE);
+    laser.request();
+  }
+}
+
+extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef * huart)
 {
   if (huart == &huart6) {
     laser.request();
-    laser.update(Size);
   }
 }

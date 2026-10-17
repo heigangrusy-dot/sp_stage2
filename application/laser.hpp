@@ -3,13 +3,13 @@
 #include "cmsis_os.h"
 #include "usart.h"
 
-#define LASER_TX_BUFFER_SIZE 9  // 激光测距模块数据帧长度
+#define LASER_TX_BUFFER_SIZE 8  // 激光测距模块数据帧长度
 
 class Laser
 {
 public:
   Laser(UART_HandleTypeDef * huart);
-  uint16_t distance;  // 只读! 激光测距值, 单位: mm, 范围: [0, 65535], 65535表示无效值
+  uint16_t distance;  // 只读! 激光测距值, 单位: cm, 范围: [0, 65535], 65535表示无效值
   uint8_t mode;       //0x00表示长距离测量    0x01快速测量  0x02高精度测量    0x03一般测量
   uint8_t temp;
   void config();

@@ -27,8 +27,8 @@ void Laser::config()
 
 void Laser::request()
 {
-  HAL_UARTEx_ReceiveToIdle_IT(huart_, tx_buffer_, tx_buffer_size_);
-  return;
+  __HAL_UART_CLEAR_OREFLAG(huart_);
+  HAL_UART_Receive_IT(huart_, tx_buffer_, tx_buffer_size_);
 }
 
 void Laser::update(uint16_t size)
@@ -36,13 +36,11 @@ void Laser::update(uint16_t size)
   if (size != tx_buffer_size_) return;
 
   uint8_t checksum = tx_buffer_[0] + tx_buffer_[1] + tx_buffer_[2] + tx_buffer_[3] + tx_buffer_[4] +
-                     tx_buffer_[5] + tx_buffer_[6] + tx_buffer_[7];  //校验位
-  if (tx_buffer_[0] != 0x5A || tx_buffer_[1] != 0x5A || tx_buffer_[8] != checksum) {
+                     tx_buffer_[5] + tx_buffer_[6];
+  if (tx_buffer_[0] != 0x5A || tx_buffer_[1] != 0x5A || tx_buffer_[7] != checksum) {
     distance = 65535;
     return;
   }
-  //数据解析
-  distance = tx_buffer_[5] | ((uint16_t)(tx_buffer_[4]) << 8);  //距离值
-  mode = tx_buffer_[6];                                         //模式
-  temp = tx_buffer_[7];                                         //温度值
+  distance = tx_buffer_[5] | ((uint16_t)(tx_buffer_[4]) << 8);
+  temp = tx_buffer_[6];
 }

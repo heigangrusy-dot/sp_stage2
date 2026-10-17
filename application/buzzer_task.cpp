@@ -7,7 +7,6 @@ extern "C" void buzzer_task(void * argument)
 {
   buzzer.start();
   uint8_t nums = 0;
-  //uint8_t dbus_connected_buzzer = 1;
   while (1) {
     if (nums >= 3) {
       osDelay(50);
@@ -21,6 +20,7 @@ extern "C" void buzzer_task(void * argument)
       }
       nums++;
     }
+    osDelay(10);
   }
 }
 

@@ -31,40 +31,42 @@ extern "C" void control_task(void * argument)
   can2.start();
 
   while (1) {
-    if (dbus_sw_r == sp::DBusSwitchMode::DOWN) {
-      lose_power();
-    }
-    else if (dbus_sw_r == sp::DBusSwitchMode::MID) {
-      if (laser.distance < 1000) {
+    switch (dbus_sw_r) {
+      case sp::DBusSwitchMode::DOWN:
+        lose_power();
+        break;
+      case sp::DBusSwitchMode::MID:
+        if (laser.distance < 1000) {
+          motor1_pid_angle.clear();
+          motor2_pid_angle.clear();
+          motor3_pid_angle.clear();
+        }
+        motor1_pid_angle.calc(0.5f, motor1.angle);
+        motor2_pid_angle.calc(0.5f, motor2.angle);
+        motor3_pid_angle.calc(0.5f, motor3.angle);
+
+        motor1.cmd(motor1_pid_angle.out);
+        motor2.cmd(motor2_pid_angle.out);
+        motor3.cmd(motor3_pid_angle.out);
+
+        motor1.write(can1.tx_data);
+        motor2.write(can1.tx_data);
+        motor3.write(can2.tx_data);
+        can1.send(motor1.tx_id);
+        can2.send(motor3.tx_id);
+        break;
+      case sp::DBusSwitchMode::UP:
         motor1_pid_angle.clear();
         motor2_pid_angle.clear();
         motor3_pid_angle.clear();
-      }
-      motor1_pid_angle.calc(2.0f, motor1.angle);
-      motor2_pid_angle.calc(2.0f, motor2.angle);
-      motor3_pid_angle.calc(2.0f, motor3.angle);
-
-      motor1.cmd(motor1_pid_angle.out);
-      motor2.cmd(motor2_pid_angle.out);
-      motor3.cmd(motor3_pid_angle.out);
-
-      motor1.write(can1.tx_data);
-      motor2.write(can1.tx_data);
-      motor3.write(can2.tx_data);
-      can1.send(motor1.tx_id);
-      can2.send(motor3.tx_id);
-    }
-    else if (dbus_sw_r == sp::DBusSwitchMode::UP) {
-      motor1_pid_angle.clear();
-      motor2_pid_angle.clear();
-      motor3_pid_angle.clear();
+        break;
     }
 
     osDelay(1);
   }
 }
 
-extern "C" void lose_power()
+extern "C" void lose_power()  //失能函数
 {
   motor1_pid_angle.clear();
   motor2_pid_angle.clear();
@@ -79,7 +81,7 @@ extern "C" void lose_power()
   can2.send(motor3.tx_id);
 }
 
-extern "C" void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef * hcan)
+extern "C" void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef * hcan)  //CAN回调
 {
   auto stamp_ms = osKernelSysTick();
 

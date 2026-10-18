@@ -4,6 +4,7 @@
 #include "laser.hpp"
 #include "motor/rm_motor/rm_motor.hpp"
 #include "tools/pid/pid.hpp"
+#include "trajectory_task.hpp"
 
 sp::RM_Motor motor1(1, sp::RM_Motors::GM6020, sp::M3508_P19);
 sp::RM_Motor motor2(2, sp::RM_Motors::GM6020, sp::M3508_P19);
@@ -16,12 +17,13 @@ sp::PID motor3_pid_angle(0.001f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, false, fals
 sp::CAN can1(&hcan1);
 sp::CAN can2(&hcan2);
 sp::DBusSwitchMode dbus_sw_r = sp::DBusSwitchMode::DOWN;
+sp::DBusSwitchMode dbus_sw_l = sp::DBusSwitchMode::DOWN;
 extern sp::CAN can2;
 extern Laser laser;
-extern sp::DBusSwitchMode dbus_sw_r;
 
 constexpr uint32_t CONNECT_OFFLINE_MS = 50;
 constexpr float MOTOR3_NORMAL_RAD = -3.14159265f / 2.0f;  // -90°
+constexpr float MOTOR2_TRACK_ZERO_RAD = 3.14159265f / 4.0f;  // 45°
 constexpr float MOTOR3_FOLD_RAD = -3.14159265f / 6.0f;    // -30°
 constexpr uint16_t FOLD_DISTANCE_CM = 40;                 //想一直处于初始状态则值调为大于200即可
 constexpr uint32_t FOLD_RESET_DELAY_MS = 1000;
@@ -30,10 +32,14 @@ uint32_t connect_last_rx_ms = 0;
 bool arm_folded = false;
 bool arm_waiting_reset = false;
 uint32_t fold_exit_ms = 0;
+bool track_latched = false;
+float track_yaw0 = 0.0f;
+float track_pitch0 = 0.0f;
 
 extern "C" void lose_power();
 extern "C" void drive_motor(float motor1_set, float motor2_set, float motor3_set);
 extern "C" void hold_arm();
+void track_arm();
 
 extern "C" void control_task(void * argument)
 {
@@ -50,12 +56,18 @@ extern "C" void control_task(void * argument)
 
     switch (dbus_sw_r) {
       case sp::DBusSwitchMode::DOWN:  //右拨杆下档，失能
-
+        track_latched = false;
         lose_power();
         break;
       case sp::DBusSwitchMode::MID:
       case sp::DBusSwitchMode::UP:
-        hold_arm();
+        if (dbus_sw_l == sp::DBusSwitchMode::UP) {
+          track_arm();
+        }
+        else {
+          track_latched = false;
+          hold_arm();
+        }
         break;
     }
 
@@ -122,6 +134,19 @@ extern "C" void hold_arm()
   drive_motor(0.0f, 0.0f, motor3_set);
 }
 
+void track_arm()
+{
+  TrajectoryPoint ref = trajectory_read();
+  if (!track_latched) {
+    track_latched = true;
+    track_yaw0 = ref.yaw;
+    track_pitch0 = ref.pitch;
+  }
+
+  drive_motor(
+    ref.yaw - track_yaw0, MOTOR2_TRACK_ZERO_RAD + (ref.pitch - track_pitch0), MOTOR3_NORMAL_RAD);
+}
+
 extern "C" void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef * hcan)  //CAN回调
 {
   auto stamp_ms = osKernelSysTick();
@@ -144,6 +169,8 @@ extern "C" void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef * hcan)  //C
         uint8_t raw = can2.rx_data[0];
         connect_last_rx_ms = stamp_ms;
         dbus_sw_r = static_cast<sp::DBusSwitchMode>(raw);
+        raw = can2.rx_data[1];
+        dbus_sw_l = static_cast<sp::DBusSwitchMode>(raw);
       }
     }
   }

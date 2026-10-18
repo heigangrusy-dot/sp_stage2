@@ -1,6 +1,0 @@
-osThreadId defaultTaskHandle;
-osThreadId LedTaskHandle;
-osThreadId BuzzerTaskHandle;
-osThreadId ImuTaskHandle;
-osThreadId RemoteTaskHandle;
-osThreadId ChassisTaskHandle;

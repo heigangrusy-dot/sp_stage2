@@ -48,9 +48,11 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     applications/led_task.cpp
     applications/buzzer_task.cpp
     applications/imu_task.cpp
+    applications/plotter.cpp
     applications/remote_task.cpp
     applications/control_safety.cpp
     applications/chassis_task.cpp
+    applications/connect_task.cpp
     sp_middleware/io/led/led.cpp
     sp_middleware/io/buzzer/buzzer.cpp
     sp_middleware/io/bmi088/bmi088.cpp

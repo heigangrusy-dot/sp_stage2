@@ -51,6 +51,8 @@ extern "C" void control_task(void * argument)
   can2.config();
   can2.start();
 
+  //电机初始化确认
+  bool motor_ready = false;
   float motor1_zero = motor1.angle;
   float motor2_zero = motor2.angle;
   float motor3_zero = motor3.angle;
@@ -58,6 +60,15 @@ extern "C" void control_task(void * argument)
   while (1) {
     if (osKernelSysTick() - connect_last_rx_ms > CONNECT_OFFLINE_MS) {
       dbus_sw_r = sp::DBusSwitchMode::DOWN;
+    }
+    //电机初始化确认，防止初始化电机读取有问题后续伤害机械结构
+    bool motors_alive = motor1.is_alive(osKernelSysTick()) && motor2.is_alive(osKernelSysTick()) &&
+                        motor3.is_alive(osKernelSysTick());
+    if (motors_alive && !motor_ready) {
+      motor_ready = true;
+      motor1_zero = motor1.angle;
+      motor2_zero = motor2.angle;
+      motor3_zero = motor3.angle;
     }
 
     switch (dbus_sw_r) {
@@ -193,3 +204,5 @@ extern "C" void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef * hcan)  //C
     }
   }
 }
+
+//待会调试先缠电工胶布，再测试上下通信，再测试测距模块，最后测试电机

@@ -9,11 +9,13 @@ extern "C" void connect_task(void * argument)  //cubemx里加个任务
   can2.start();
   while (true) {
     uint8_t sw_r = 0xFF;
+    uint8_t sw_l = 0xFF;
     if (remote.is_alive(osKernelSysTick())) {
       sw_r = static_cast<uint8_t>(remote.sw_r);
+      sw_l = static_cast<uint8_t>(remote.sw_l);
     }
     can2.tx_data[0] = sw_r;
-    can2.tx_data[1] = 0;
+    can2.tx_data[1] = sw_l;
     can2.tx_data[2] = 0;
     can2.tx_data[3] = 0;
     can2.tx_data[4] = 0;

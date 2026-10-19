@@ -1,15 +1,27 @@
 #include "cmsis_os.h"
 #include "io/plotter/plotter.hpp"
 #include "laser.hpp"
+#include "motor/rm_motor/rm_motor.hpp"
+#include "tools/pid/pid.hpp"
 
 extern Laser laser;
+extern sp::RM_Motor motor1;
+extern sp::RM_Motor motor2;
+extern sp::RM_Motor motor3;
+
+extern sp::PID motor1_pid_angle;
+extern sp::PID motor2_pid_angle;
+extern sp::PID motor3_pid_angle;
 
 sp::Plotter plotter(&huart1, false);
 
 extern "C" void plotter_task(void * argument)
 {
   while (true) {
-    plotter.plot((float)(laser.distance));
+    plotter.plot(motor1.angle, motor1_pid_angle.out);  //调试电机1
+    // plotter.plot(motor2.angle, motor2_pid_angle.out);  //调试电机2
+    // plotter.plot(motor3.angle, motor3_pid_angle.out);  //调试电机3
+    //plotter.plot((float)(laser.distance));
     osDelay(10);
   }
 }

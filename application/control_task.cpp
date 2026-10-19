@@ -6,9 +6,9 @@
 #include "tools/pid/pid.hpp"
 #include "trajectory_task.hpp"
 
-sp::RM_Motor motor1(1, sp::RM_Motors::GM6020, sp::M3508_P19);
-sp::RM_Motor motor2(2, sp::RM_Motors::GM6020, sp::M3508_P19);
-sp::RM_Motor motor3(3, sp::RM_Motors::M2006, sp::M3508_P19);
+sp::RM_Motor motor1(1, sp::RM_Motors::GM6020);                //云台底部，用can2
+sp::RM_Motor motor2(2, sp::RM_Motors::GM6020);                //侧面用can1
+sp::RM_Motor motor3(3, sp::RM_Motors::M2006, sp::M2006_P36);  //侧面用can1
 
 sp::PID motor1_pid_angle(0.001f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, false, false);
 sp::PID motor2_pid_angle(0.001f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, false, false);
@@ -18,28 +18,30 @@ sp::CAN can1(&hcan1);
 sp::CAN can2(&hcan2);
 sp::DBusSwitchMode dbus_sw_r = sp::DBusSwitchMode::DOWN;
 sp::DBusSwitchMode dbus_sw_l = sp::DBusSwitchMode::DOWN;
-extern sp::CAN can2;
 extern Laser laser;
 
 constexpr uint32_t CONNECT_OFFLINE_MS = 50;
-constexpr float MOTOR3_NORMAL_RAD = -3.14159265f / 2.0f;  // -90°
+constexpr float MOTOR3_NORMAL_RAD = -3.14159265f / 2.0f;     // -90°
 constexpr float MOTOR2_TRACK_ZERO_RAD = 3.14159265f / 4.0f;  // 45°
-constexpr float MOTOR3_FOLD_RAD = -3.14159265f / 6.0f;    // -30°
-constexpr uint16_t FOLD_DISTANCE_CM = 40;                 //想一直处于初始状态则值调为大于200即可
+constexpr float MOTOR3_FOLD_RAD = -3.14159265f / 6.0f;       // -30°
+constexpr uint16_t FOLD_DISTANCE_CM = 40;                    //想一直处于初始状态则值调为大于200即可
 constexpr uint32_t FOLD_RESET_DELAY_MS = 1000;
 
+//折叠复位功能相关标志
 uint32_t connect_last_rx_ms = 0;
 bool arm_folded = false;
 bool arm_waiting_reset = false;
 uint32_t fold_exit_ms = 0;
+
+//轨迹跟踪功能相关标志
 bool track_latched = false;
 float track_yaw0 = 0.0f;
 float track_pitch0 = 0.0f;
 
 extern "C" void lose_power();
 extern "C" void drive_motor(float motor1_set, float motor2_set, float motor3_set);
-extern "C" void hold_arm();
-void track_arm();
+extern "C" void hold_arm(float motor1_zero, float motor2_zero, float motor3_zero);
+void track_arm(float motor1_zero, float motor2_zero, float motor3_zero);
 
 extern "C" void control_task(void * argument)
 {
@@ -48,6 +50,10 @@ extern "C" void control_task(void * argument)
 
   can2.config();
   can2.start();
+
+  float motor1_zero = motor1.angle;
+  float motor2_zero = motor2.angle;
+  float motor3_zero = motor3.angle;
 
   while (1) {
     if (osKernelSysTick() - connect_last_rx_ms > CONNECT_OFFLINE_MS) {
@@ -62,11 +68,11 @@ extern "C" void control_task(void * argument)
       case sp::DBusSwitchMode::MID:
       case sp::DBusSwitchMode::UP:
         if (dbus_sw_l == sp::DBusSwitchMode::UP) {
-          track_arm();
+          track_arm(motor1_zero, motor2_zero, motor3_zero);
         }
         else {
           track_latched = false;
-          hold_arm();
+          hold_arm(motor1_zero, motor2_zero, motor3_zero);
         }
         break;
     }
@@ -83,11 +89,12 @@ extern "C" void lose_power()  //失能函数
   motor1.cmd(0.0f);
   motor2.cmd(0.0f);
   motor3.cmd(0.0f);
-  motor1.write(can1.tx_data);
+  motor1.write(can2.tx_data);
   motor2.write(can1.tx_data);
-  motor3.write(can2.tx_data);
-  can1.send(motor1.tx_id);
-  can2.send(motor3.tx_id);
+  motor3.write(can1.tx_data);
+  can2.send(motor1.tx_id);
+  can1.send(motor2.tx_id);
+  can1.send(motor3.tx_id);
 }
 
 extern "C" void drive_motor(float motor1_set, float motor2_set, float motor3_set)  //驱动电机函数
@@ -100,14 +107,16 @@ extern "C" void drive_motor(float motor1_set, float motor2_set, float motor3_set
   motor2.cmd(motor2_pid_angle.out);
   motor3.cmd(motor3_pid_angle.out);
 
-  motor1.write(can1.tx_data);
+  motor1.write(can2.tx_data);
   motor2.write(can1.tx_data);
-  motor3.write(can2.tx_data);
-  can1.send(motor1.tx_id);
-  can2.send(motor3.tx_id);
+  motor3.write(can1.tx_data);
+
+  can2.send(motor1.tx_id);
+  can1.send(motor2.tx_id);
+  can1.send(motor3.tx_id);
 }
 
-extern "C" void hold_arm()
+extern "C" void hold_arm(float motor1_zero, float motor2_zero, float motor3_zero)
 {
   float motor3_set = MOTOR3_NORMAL_RAD;
   uint32_t now_ms = osKernelSysTick();
@@ -131,10 +140,10 @@ extern "C" void hold_arm()
     }
   }
 
-  drive_motor(0.0f, 0.0f, motor3_set);
+  drive_motor(motor1_zero, motor2_zero, motor3_zero + motor3_set);
 }
 
-void track_arm()
+void track_arm(float motor1_zero, float motor2_zero, float motor3_zero)
 {
   TrajectoryPoint ref = trajectory_read();
   if (!track_latched) {
@@ -144,7 +153,8 @@ void track_arm()
   }
 
   drive_motor(
-    ref.yaw - track_yaw0, MOTOR2_TRACK_ZERO_RAD + (ref.pitch - track_pitch0), MOTOR3_NORMAL_RAD);
+    motor1_zero + ref.yaw - track_yaw0, motor2_zero + (ref.pitch - track_pitch0),
+    motor3_zero + MOTOR3_NORMAL_RAD);
 }
 
 extern "C" void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef * hcan)  //CAN回调
@@ -155,22 +165,30 @@ extern "C" void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef * hcan)  //C
     if (hcan == &hcan1) {
       can1.recv();
 
-      if (can1.rx_id == motor1.rx_id)
-        motor1.read(can1.rx_data, stamp_ms);
+      if (can1.rx_id == motor3.rx_id)
+        motor3.read(can1.rx_data, stamp_ms);
       else if (can1.rx_id == motor2.rx_id)
         motor2.read(can1.rx_data, stamp_ms);
     }
     if (hcan == &hcan2) {
       can2.recv();
 
-      if (can2.rx_id == motor3.rx_id)
-        motor3.read(can2.rx_data, stamp_ms);
+      if (can2.rx_id == motor1.rx_id)
+        motor1.read(can2.rx_data, stamp_ms);
       else if (can2.rx_id == 0x111) {
-        uint8_t raw = can2.rx_data[0];
-        connect_last_rx_ms = stamp_ms;
-        dbus_sw_r = static_cast<sp::DBusSwitchMode>(raw);
-        raw = can2.rx_data[1];
-        dbus_sw_l = static_cast<sp::DBusSwitchMode>(raw);
+        if (can2.rx_data[0] == 0xFF || can2.rx_data[1] == 0xFF) {
+          dbus_sw_r = sp::DBusSwitchMode::DOWN;
+          dbus_sw_l = sp::DBusSwitchMode::DOWN;
+          connect_last_rx_ms = stamp_ms;
+          return;
+        }  //底盘遥控器断联，can通信却良好
+        else {
+          uint8_t raw = can2.rx_data[0];
+          connect_last_rx_ms = stamp_ms;  //负责两板子can通信检查
+          dbus_sw_r = static_cast<sp::DBusSwitchMode>(raw);
+          raw = can2.rx_data[1];
+          dbus_sw_l = static_cast<sp::DBusSwitchMode>(raw);
+        }
       }
     }
   }

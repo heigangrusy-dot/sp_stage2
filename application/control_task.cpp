@@ -14,11 +14,12 @@ sp::RM_Motor motor1(1, sp::RM_Motors::GM6020);                //云台底部，�
 sp::RM_Motor motor2(2, sp::RM_Motors::GM6020);                //侧面用can1
 sp::RM_Motor motor3(3, sp::RM_Motors::M2006, sp::M2006_P36);  //侧面用can1
 
-sp::PID motor1_pid_angle(0.001f, 1.0f, 0.1f, 0.0f, 2.5f, 0.3f, 0.7f, false, true);
-sp::PID motor2_pid_angle(0.001f, 0.15f, 0.1f, 0.0f, 2.5f, 1.0f, 1.0f, false, true);
+sp::PID motor1_pid_angle(
+  0.001f, 1.0f, 0.1f, 0.0f, 2.5f, 0.3f, 0.7f, false, true);  //云台底部yaw电机
+sp::PID motor2_pid_angle(
+  0.001f, 0.1f, 0.1f, 0.0f, 1.0f, 0.1f, 1.0f, false, true);  //云台侧面摆头pitch电机
 sp::PID motor3_pid_angle(
-  0.02f, 0.1f, 0.1f, 0.0f, 2.5f, 0.1f, 1.0f, false,
-  true);  //0.001f, 0.04f, 0.23f, 0.0f, 2.5f, 0.1f, 1.0f, false, true
+  0.001f, 0.57f, 0.1f, 0.0f, 1.0f, 0.1f, 1.0f, false, true);  //云台侧面摆臂pitch电机
 
 sp::CAN can1(&hcan1);
 sp::CAN can2(&hcan2);
@@ -29,8 +30,8 @@ extern sp::BMI088 bmi088;
 extern sp::Mahony imu;
 
 // ==================== motor3重力前馈（上电时横杆水平） ====================
-constexpr float MOTOR3_GRAVITY_TORQUE = 0.475f;  // 水平时补偿力矩，N·m（含力臂的等效系数）
-constexpr float MOTOR3_MAX_TORQUE = 2.5f;        // PID与前馈叠加后的限幅，N·m
+constexpr float MOTOR3_GRAVITY_TORQUE = 0.5f;  // 水平时补偿力矩，N·m（含力臂的等效系数）
+constexpr float MOTOR3_MAX_TORQUE = 2.5f;      // PID与前馈叠加后的限幅，N·m
 static float motor3_horizontal_angle = 0.0f;
 static bool motor3_horizontal_ready = false;
 float motor3_gravity_ff = 0.0f;  // 调试观察：实际加入的重力前馈
@@ -58,6 +59,84 @@ extern "C" void lose_power();
 extern "C" void drive_motor(float motor1_set, float motor2_set, float motor3_set);
 extern "C" void hold_arm(float motor1_zero, float motor2_zero, float motor3_zero);
 void track_arm(float motor1_zero, float motor2_zero, float motor3_zero);
+static void drive_motor_feedback(
+  float motor1_set, float motor2_set, float motor3_set, float motor2_feedback);
+
+// ==================== 临时：Pitch分阶段测试（整段可删除） ====================
+// 0=未启动，1=motor3抬升，2=Pitch回零，3=轨迹跟踪。
+int pitch_test_stage = 0;
+float pitch_test_target = 0.0f;
+static void test_pitch_trajectory(bool enabled)
+{
+  constexpr float kDeg = 3.14159265f / 180.0f;
+  constexpr uint32_t kSettleMs = 200;
+  static uint32_t stable_since = 0, track_start = 0, phase0 = 0;
+  static bool settling = false;
+  static float yaw_hold = 0.0f, motor2_hold = 0.0f;
+
+  if (!enabled || !motor3_horizontal_ready || !std::isfinite(imu.pitch)) {
+    pitch_test_stage = 0;
+    pitch_test_target = 0.0f;
+    settling = false;
+    lose_power();
+    return;
+  }
+
+  const uint32_t now = osKernelSysTick();
+  const float arm_target = motor3_horizontal_angle - 60.0f * kDeg;
+  if (pitch_test_stage == 0) {
+    yaw_hold = motor1.angle;
+    motor2_hold = motor2.angle;
+    motor1_pid_angle.clear();
+    motor2_pid_angle.clear();
+    motor3_pid_angle.clear();
+    pitch_test_stage = 1;
+  }
+
+  if (pitch_test_stage == 1) {
+    drive_motor(yaw_hold, motor2_hold, arm_target);
+  }
+  else {
+    pitch_test_target =
+      pitch_test_stage == 3 ? trajectory_sample_at_ms(now - track_start + phase0).pitch : 0.0f;
+    // 直接用IMU Pitch闭环；正力矩使motor2.angle和imu.pitch增加。
+    drive_motor_feedback(yaw_hold, pitch_test_target, arm_target, imu.pitch);
+  }
+
+  if (pitch_test_stage == 3) return;
+  const bool reached = pitch_test_stage == 1 ? std::abs(motor3.angle - arm_target) < 2.0f * kDeg
+                                             : std::abs(imu.pitch) < 1.0f * kDeg;
+  if (!reached) {
+    settling = false;
+    return;
+  }
+  if (!settling) {
+    settling = true;
+    stable_since = now;
+  }
+  if (now - stable_since < kSettleMs) return;
+  settling = false;
+
+  if (pitch_test_stage == 1) {
+    motor2_pid_angle.clear();  // 从编码器闭环切换到IMU闭环
+    pitch_test_stage = 2;
+  }
+  else {
+    // 从原始Pitch曲线最接近0的位置开始，避免直接跳到-30°。
+    phase0 = 0;
+    float best = std::abs(trajectory_sample_at_ms(0).pitch);
+    for (uint32_t t = 1; t < TRAJECTORY_PERIOD_MS; ++t) {
+      const float error = std::abs(trajectory_sample_at_ms(t).pitch);
+      if (error < best) {
+        best = error;
+        phase0 = t;
+      }
+    }
+    track_start = osKernelSysTick();
+    pitch_test_stage = 3;
+  }
+}
+// ==================== 临时Pitch测试结束 ====================
 
 // ==================== 临时：仅测试Yaw轨迹（整段可删除） ====================
 static void test_yaw_trajectory(bool enabled)
@@ -131,12 +210,13 @@ extern "C" void control_task(void * argument)
     switch (dbus_sw_r) {
       case sp::DBusSwitchMode::DOWN:  //右拨杆下档，失能
         track_latched = false;
-        test_yaw_trajectory(false);  // 临时Yaw测试：退出时复位轨迹
+        test_pitch_trajectory(false);  // 临时Pitch测试：退出时复位
         break;
       case sp::DBusSwitchMode::MID:
       case sp::DBusSwitchMode::UP:
+        test_pitch_trajectory(motors_alive);  // 临时Pitch测试
         //drive_motor(motor1_zero, motor2_zero, motor3_zero - 1.0f);  //驱动电机
-        hold_arm(motor1_zero, motor2_zero, motor3_zero);  //保持机械臂
+        // hold_arm(motor1_zero, motor2_zero, motor3_zero);  //保持机械臂
         // test_yaw_trajectory(motor1.is_alive(osKernelSysTick()));  // 临时Yaw测试
         // if (dbus_sw_l == sp::DBusSwitchMode::UP) {
         //   track_arm(motor1_zero, motor2_zero, motor3_zero);
@@ -171,8 +251,14 @@ extern "C" void lose_power()  //失能函数
 
 extern "C" void drive_motor(float motor1_set, float motor2_set, float motor3_set)  //驱动电机函数
 {
+  drive_motor_feedback(motor1_set, motor2_set, motor3_set, motor2.angle);
+}
+
+static void drive_motor_feedback(
+  float motor1_set, float motor2_set, float motor3_set, float motor2_feedback)
+{
   motor1_pid_angle.calc(motor1_set, motor1.angle);
-  motor2_pid_angle.calc(motor2_set, motor2.angle);
+  motor2_pid_angle.calc(motor2_set, motor2_feedback);
   motor3_pid_angle.calc(motor3_set, motor3.angle);
 
   motor1.cmd(motor1_pid_angle.out);

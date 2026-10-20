@@ -2,6 +2,7 @@
 #include "io/plotter/plotter.hpp"
 #include "laser.hpp"
 #include "motor/rm_motor/rm_motor.hpp"
+#include "tools/mahony/mahony.hpp"
 #include "tools/pid/pid.hpp"
 
 extern Laser laser;
@@ -13,6 +14,9 @@ extern sp::PID motor1_pid_angle;
 extern sp::PID motor2_pid_angle;
 extern sp::PID motor3_pid_angle;
 
+extern sp::Mahony imu;
+extern float pitch_test_target;
+
 sp::Plotter plotter(&huart1, false);
 
 extern "C" void plotter_task(void * argument)
@@ -21,8 +25,11 @@ extern "C" void plotter_task(void * argument)
     // ==================== 临时：Yaw轨迹对比（目标、实际，单位rad） ====================
     // plotter.plot(motor1_pid_angle.data.set, motor1.angle);
     // ==================== 临时Yaw轨迹对比结束 ====================
-    // plotter.plot(motor2.angle, motor2_pid_angle.out);  //调试电机2
-    plotter.plot(motor3.angle, motor3_pid_angle.out, (float)(laser.distance));  //调试电机3
+    // 临时Pitch测试：目标、实际姿态，单位rad。
+    plotter.plot(
+      pitch_test_target, imu.pitch, motor2.angle, motor2_pid_angle.out, motor3.angle,
+      motor3_pid_angle.out);  //调试电机2和电机3
+    // plotter.plot(motor3.angle, motor3_pid_angle.out, (float)(laser.distance));  //调试电机3
     //plotter.plot((float)(laser.distance));
     osDelay(10);
   }

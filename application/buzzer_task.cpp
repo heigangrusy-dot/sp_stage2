@@ -22,6 +22,7 @@ extern "C" void buzzer_task(void * argument)
     }
     osDelay(10);
   }
+  // osDelay(100);
 }
 
 // if (dbus_connected_buzzer && remote.is_alive(osKernelSysTick()) && nums >= 3) {  //连接成功

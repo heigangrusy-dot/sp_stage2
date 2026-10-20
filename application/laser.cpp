@@ -9,20 +9,22 @@ Laser::Laser(UART_HandleTypeDef * huart) : huart_(huart)
 
 void Laser::config()
 {
-  uint8_t config_command1[4] = {0xA5, 0x76, 0x01, 0x1C};  // 将模块波特率切换到115200
-  uint8_t config_command2[4] = {0xA5, 0x65, 0x01, 0x0B};  // 将模块输出模式改为连续输出
+  // uint8_t config_command1[4] = {0xA5, 0x76, 0x01, 0x1C};  // 将模块波特率切换到115200
+  // uint8_t config_command2[4] = {0xA5, 0x65, 0x01, 0x0B};  // 将模块输出模式改为连续输出
+  // // 保存当前设置，断电后保留
+  // uint8_t save[] = {0xA5, 0x87, 0x01, 0x2D};
 
-  huart_->Init.BaudRate = 9600;
-  HAL_UART_Init(huart_);
-  osDelay(50);
+  // // huart_->Init.BaudRate = 9600;
+  // // HAL_UART_Init(huart_);
+  // // osDelay(50);
 
-  HAL_UART_Transmit(huart_, config_command1, sizeof(config_command1), 1000);
+  // HAL_UART_Transmit(huart_, config_command1, sizeof(config_command1), 1000);
 
-  huart_->Init.BaudRate = 115200;
-  HAL_UART_Init(huart_);
-  osDelay(50);
+  // huart_->Init.BaudRate = 115200;
+  // HAL_UART_Init(huart_);
 
-  HAL_UART_Transmit(huart_, config_command2, sizeof(config_command2), 1000);
+  // HAL_UART_Transmit(huart_, config_command2, sizeof(config_command2), 1000);
+  // HAL_UART_Transmit(huart_, save, sizeof(save), 1000);
 }
 
 void Laser::request()

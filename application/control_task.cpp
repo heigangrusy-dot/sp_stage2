@@ -1,8 +1,12 @@
+#include <cmath>
+
 #include "cmsis_os.h"
+#include "io/bmi088/bmi088.hpp"
 #include "io/can/can.hpp"
 #include "io/dbus/dbus.hpp"
 #include "laser.hpp"
 #include "motor/rm_motor/rm_motor.hpp"
+#include "tools/mahony/mahony.hpp"
 #include "tools/pid/pid.hpp"
 #include "trajectory_task.hpp"
 
@@ -10,20 +14,32 @@ sp::RM_Motor motor1(1, sp::RM_Motors::GM6020);                //云台底部，�
 sp::RM_Motor motor2(2, sp::RM_Motors::GM6020);                //侧面用can1
 sp::RM_Motor motor3(3, sp::RM_Motors::M2006, sp::M2006_P36);  //侧面用can1
 
-sp::PID motor1_pid_angle(0.001f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, false, false);
-sp::PID motor2_pid_angle(0.001f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, false, false);
-sp::PID motor3_pid_angle(0.001f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, false, false);
+sp::PID motor1_pid_angle(0.001f, 1.0f, 0.1f, 0.0f, 2.5f, 0.3f, 0.7f, false, true);
+sp::PID motor2_pid_angle(0.001f, 0.15f, 0.1f, 0.0f, 2.5f, 1.0f, 1.0f, false, true);
+sp::PID motor3_pid_angle(
+  0.02f, 0.1f, 0.1f, 0.0f, 2.5f, 0.1f, 1.0f, false,
+  true);  //0.001f, 0.04f, 0.23f, 0.0f, 2.5f, 0.1f, 1.0f, false, true
 
 sp::CAN can1(&hcan1);
 sp::CAN can2(&hcan2);
 sp::DBusSwitchMode dbus_sw_r = sp::DBusSwitchMode::DOWN;
 sp::DBusSwitchMode dbus_sw_l = sp::DBusSwitchMode::DOWN;
 extern Laser laser;
+extern sp::BMI088 bmi088;
+extern sp::Mahony imu;
+
+// ==================== motor3重力前馈（上电时横杆水平） ====================
+constexpr float MOTOR3_GRAVITY_TORQUE = 0.475f;  // 水平时补偿力矩，N·m（含力臂的等效系数）
+constexpr float MOTOR3_MAX_TORQUE = 2.5f;        // PID与前馈叠加后的限幅，N·m
+static float motor3_horizontal_angle = 0.0f;
+static bool motor3_horizontal_ready = false;
+float motor3_gravity_ff = 0.0f;  // 调试观察：实际加入的重力前馈
+// ==================== motor3重力前馈结束 ====================
 
 constexpr uint32_t CONNECT_OFFLINE_MS = 50;
-constexpr float MOTOR3_NORMAL_RAD = -3.14159265f / 2.0f;     // -90°
+constexpr float MOTOR3_NORMAL_RAD = -3.14159265f / 3.0f;     // -60°
 constexpr float MOTOR2_TRACK_ZERO_RAD = 3.14159265f / 4.0f;  // 45°
-constexpr float MOTOR3_FOLD_RAD = -3.14159265f / 6.0f;       // -30°
+constexpr float MOTOR3_FOLD_RAD = -3.14159265f / 12.0f;      // -30°
 constexpr uint16_t FOLD_DISTANCE_CM = 40;                    //想一直处于初始状态则值调为大于200即可
 constexpr uint32_t FOLD_RESET_DELAY_MS = 1000;
 
@@ -43,6 +59,43 @@ extern "C" void drive_motor(float motor1_set, float motor2_set, float motor3_set
 extern "C" void hold_arm(float motor1_zero, float motor2_zero, float motor3_zero);
 void track_arm(float motor1_zero, float motor2_zero, float motor3_zero);
 
+// ==================== 临时：仅测试Yaw轨迹（整段可删除） ====================
+static void test_yaw_trajectory(bool enabled)
+{
+  static bool started = false;
+  static uint32_t start_ms = 0;
+  static float angle0 = 0.0f;
+
+  if (!enabled) {
+    started = false;
+    lose_power();
+    return;
+  }
+
+  const uint32_t now = osKernelSysTick();
+  if (!started) {
+    started = true;
+    start_ms = now;
+    angle0 = motor1.angle;
+    motor1_pid_angle.clear();
+  }
+
+  const float target =
+    angle0 + trajectory_sample_at_ms(now - start_ms).yaw - trajectory_sample_at_ms(0).yaw;
+  motor1_pid_angle.calc(target, motor1.angle);
+  motor1.cmd(motor1_pid_angle.out);
+  motor2.cmd(0.0f);
+  motor3.cmd(0.0f);
+
+  motor1.write(can2.tx_data);
+  motor2.write(can1.tx_data);
+  motor3.write(can1.tx_data);
+  can2.send(motor1.tx_id);
+  can1.send(motor2.tx_id);
+  can1.send(motor3.tx_id);
+}
+// ==================== 临时Yaw测试结束 ====================
+
 extern "C" void control_task(void * argument)
 {
   can1.config();
@@ -58,6 +111,10 @@ extern "C" void control_task(void * argument)
   float motor3_zero = motor3.angle;
 
   while (1) {
+    if (!motor3_horizontal_ready && motor3.is_alive(osKernelSysTick())) {
+      motor3_horizontal_angle = motor3.angle;
+      motor3_horizontal_ready = true;
+    }
     if (osKernelSysTick() - connect_last_rx_ms > CONNECT_OFFLINE_MS) {
       dbus_sw_r = sp::DBusSwitchMode::DOWN;
     }
@@ -74,17 +131,20 @@ extern "C" void control_task(void * argument)
     switch (dbus_sw_r) {
       case sp::DBusSwitchMode::DOWN:  //右拨杆下档，失能
         track_latched = false;
-        lose_power();
+        test_yaw_trajectory(false);  // 临时Yaw测试：退出时复位轨迹
         break;
       case sp::DBusSwitchMode::MID:
       case sp::DBusSwitchMode::UP:
-        if (dbus_sw_l == sp::DBusSwitchMode::UP) {
-          track_arm(motor1_zero, motor2_zero, motor3_zero);
-        }
-        else {
-          track_latched = false;
-          hold_arm(motor1_zero, motor2_zero, motor3_zero);
-        }
+        //drive_motor(motor1_zero, motor2_zero, motor3_zero - 1.0f);  //驱动电机
+        hold_arm(motor1_zero, motor2_zero, motor3_zero);  //保持机械臂
+        // test_yaw_trajectory(motor1.is_alive(osKernelSysTick()));  // 临时Yaw测试
+        // if (dbus_sw_l == sp::DBusSwitchMode::UP) {
+        //   track_arm(motor1_zero, motor2_zero, motor3_zero);
+        // }
+        // else {
+        //   track_latched = false;
+        //   hold_arm(motor1_zero, motor2_zero, motor3_zero);
+        // }
         break;
     }
 
@@ -97,6 +157,7 @@ extern "C" void lose_power()  //失能函数
   motor1_pid_angle.clear();
   motor2_pid_angle.clear();
   motor3_pid_angle.clear();
+  motor3_gravity_ff = 0.0f;
   motor1.cmd(0.0f);
   motor2.cmd(0.0f);
   motor3.cmd(0.0f);
@@ -116,7 +177,14 @@ extern "C" void drive_motor(float motor1_set, float motor2_set, float motor3_set
 
   motor1.cmd(motor1_pid_angle.out);
   motor2.cmd(motor2_pid_angle.out);
-  motor3.cmd(motor3_pid_angle.out);
+  // ==================== motor3重力前馈 ====================
+  // 负向转动为抬升，水平夹角 = -(当前角度 - 上电水平角度)，单位rad。
+  const float arm_pitch = -(motor3.angle - motor3_horizontal_angle);
+  motor3_gravity_ff = motor3_horizontal_ready ? -MOTOR3_GRAVITY_TORQUE * std::cos(arm_pitch) : 0.0f;
+  const float motor3_torque =
+    sp::limit_max(motor3_pid_angle.out + motor3_gravity_ff, MOTOR3_MAX_TORQUE);
+  motor3.cmd(motor3_horizontal_ready ? motor3_torque : 0.0f);
+  // ==================== motor3重力前馈结束 ====================
 
   motor1.write(can2.tx_data);
   motor2.write(can1.tx_data);

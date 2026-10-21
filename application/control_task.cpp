@@ -15,7 +15,7 @@ sp::RM_Motor motor2(2, sp::RM_Motors::GM6020);                //侧面用can1
 sp::RM_Motor motor3(3, sp::RM_Motors::M2006, sp::M2006_P36);  //侧面用can1
 
 sp::PID motor1_pid_angle(
-  0.001f, 1.0f, 0.1f, 0.0f, 2.5f, 0.3f, 0.7f, false, true);  //云台底部yaw电机
+  0.001f, 0.75f, 0.0f, 0.01f, 2.5f, 1.5f, 0.5f, false, true);  //云台底部yaw电机
 sp::PID motor2_pid_angle(
   0.001f, 0.71f, 0.52f, 0.0025f, 1.0f, 0.25f, 0.5f, false, true);  //云台侧面摆头pitch电机
 //0.001f, 0.8f, 0.5f, 0.001f, 1.0f, 0.3f, 1.0f, false, true
@@ -57,7 +57,7 @@ float track_yaw0 = 0.0f;
 float track_pitch0 = 0.0f;
 
 // 平滑摩擦补偿：按误差方向补偿，接近目标时连续减小至0。
-constexpr float MOTOR1_FRICTION_TORQUE = 0.01f;                         // N·m
+constexpr float MOTOR1_FRICTION_TORQUE = 0.044f;                        // N·m
 constexpr float MOTOR2_FRICTION_TORQUE = 0.155f;                        // N·m
 constexpr float MOTOR3_FRICTION_TORQUE = 0.1f;                          // N·m
 constexpr float FRICTION_TRANSITION_RAD = 3.0f * 3.14159265f / 180.0f;  // 过渡角度3°
@@ -118,11 +118,11 @@ extern "C" void control_task(void * argument)
         break;
       case sp::DBusSwitchMode::MID:
       case sp::DBusSwitchMode::UP:
-        test_pitch_trajectory(motors_alive);  // 临时Pitch测试
+        //test_pitch_trajectory(motors_alive);  // 临时Pitch测试
 
         //hold_arm(motor1_zero, motor2_zero, motor3_zero);  //保持机械臂
-        // test_yaw_trajectory(motor1.is_alive(osKernelSysTick()));  // 临时Yaw测试
-
+        test_yaw_trajectory(motor1.is_alive(osKernelSysTick()));  // 临时Yaw测试
+        //drive_motor(motor1_zero + 1.0f, motor2_zero, motor3_zero);  //保持机械臂
         // if (dbus_sw_l == sp::DBusSwitchMode::UP) {
         //   track_arm(motor1_zero, motor2_zero, motor3_zero);
         // }

@@ -28,8 +28,8 @@ extern "C" void plotter_task(void * argument)
     // ==================== 临时Yaw轨迹对比结束 ====================
     // 临时Pitch测试：目标、实际姿态，单位rad。
     plotter.plot(
-      pitch_test_target, imu.pitch, motor2.angle, motor2_pid_angle.out, motor3.angle,
-      motor3_pid_angle.out);  //调试电机2和电机3
+      motor1_pid_angle.data.set, imu.pitch, motor2.angle, motor2_pid_angle.out, motor1.angle,
+      motor1_pid_angle.out);  //调试电机2和电机3
     // plotter.plot(motor3.angle, motor3_pid_angle.out, (float)(laser.distance));  //调试电机3
     //plotter.plot((float)(laser.distance));
     // plotter.plot(

@@ -17,10 +17,11 @@ sp::RM_Motor motor3(3, sp::RM_Motors::M2006, sp::M2006_P36);  //侧面用can1
 sp::PID motor1_pid_angle(
   0.001f, 1.0f, 0.1f, 0.0f, 2.5f, 0.3f, 0.7f, false, true);  //云台底部yaw电机
 sp::PID motor2_pid_angle(
-  0.001f, 0.1f, 0.1f, 0.0f, 1.0f, 0.1f, 1.0f, false, true);  //云台侧面摆头pitch电机
+  0.001f, 0.71f, 0.52f, 0.0025f, 1.0f, 0.25f, 0.5f, false, true);  //云台侧面摆头pitch电机
+//0.001f, 0.8f, 0.5f, 0.001f, 1.0f, 0.3f, 1.0f, false, true
 sp::PID motor3_pid_angle(
-  0.001f, 0.57f, 0.1f, 0.0f, 1.0f, 0.1f, 1.0f, false, true);  //云台侧面摆臂pitch电机
-
+  0.001f, 0.425f, 0.1f, 0.031f, 1.0f, 0.1f, 0.5f, false, true);  //云台侧面摆臂pitch电机
+//0.001f, 0.42f, 0.1f, 0.03f, 1.0f, 0.1f, 0.5f, false, true
 sp::CAN can1(&hcan1);
 sp::CAN can2(&hcan2);
 sp::DBusSwitchMode dbus_sw_r = sp::DBusSwitchMode::DOWN;
@@ -30,7 +31,7 @@ extern sp::BMI088 bmi088;
 extern sp::Mahony imu;
 
 // ==================== motor3重力前馈（上电时横杆水平） ====================
-constexpr float MOTOR3_GRAVITY_TORQUE = 0.5f;  // 水平时补偿力矩，N·m（含力臂的等效系数）
+constexpr float MOTOR3_GRAVITY_TORQUE = 0.6f;  // 水平时补偿力矩，N·m（含力臂的等效系数）
 constexpr float MOTOR3_MAX_TORQUE = 2.5f;      // PID与前馈叠加后的限幅，N·m
 static float motor3_horizontal_angle = 0.0f;
 static bool motor3_horizontal_ready = false;
@@ -55,6 +56,17 @@ bool track_latched = false;
 float track_yaw0 = 0.0f;
 float track_pitch0 = 0.0f;
 
+// 平滑摩擦补偿：按误差方向补偿，接近目标时连续减小至0。
+constexpr float MOTOR1_FRICTION_TORQUE = 0.01f;                         // N·m
+constexpr float MOTOR2_FRICTION_TORQUE = 0.155f;                        // N·m
+constexpr float MOTOR3_FRICTION_TORQUE = 0.1f;                          // N·m
+constexpr float FRICTION_TRANSITION_RAD = 3.0f * 3.14159265f / 180.0f;  // 过渡角度3°
+constexpr float MOTOR1_MAX_TORQUE = 2.5f;
+constexpr float MOTOR2_MAX_TORQUE = 1.0f;
+static float friction_feedforward(float error, float torque);
+static void test_pitch_trajectory(bool enabled);
+static void test_yaw_trajectory(bool enabled);
+
 extern "C" void lose_power();
 extern "C" void drive_motor(float motor1_set, float motor2_set, float motor3_set);
 extern "C" void hold_arm(float motor1_zero, float motor2_zero, float motor3_zero);
@@ -66,6 +78,70 @@ static void drive_motor_feedback(
 // 0=未启动，1=motor3抬升，2=Pitch回零，3=轨迹跟踪。
 int pitch_test_stage = 0;
 float pitch_test_target = 0.0f;
+
+extern "C" void control_task(void * argument)
+{
+  can1.config();
+  can1.start();
+
+  can2.config();
+  can2.start();
+
+  //电机初始化确认
+  bool motor_ready = false;
+  float motor1_zero = motor1.angle;
+  float motor2_zero = motor2.angle;
+  float motor3_zero = motor3.angle;
+
+  while (1) {
+    if (!motor3_horizontal_ready && motor3.is_alive(osKernelSysTick())) {
+      motor3_horizontal_angle = motor3.angle;
+      motor3_horizontal_ready = true;
+    }
+    if (osKernelSysTick() - connect_last_rx_ms > CONNECT_OFFLINE_MS) {
+      dbus_sw_r = sp::DBusSwitchMode::DOWN;
+    }
+    //电机初始化确认，防止初始化电机读取有问题后续伤害机械结构
+    bool motors_alive = motor1.is_alive(osKernelSysTick()) && motor2.is_alive(osKernelSysTick()) &&
+                        motor3.is_alive(osKernelSysTick());
+    if (motors_alive && !motor_ready) {
+      motor_ready = true;
+      motor1_zero = motor1.angle;
+      motor2_zero = motor2.angle;
+      motor3_zero = motor3.angle;
+    }
+
+    switch (dbus_sw_r) {
+      case sp::DBusSwitchMode::DOWN:  //右拨杆下档，失能
+        track_latched = false;
+        test_pitch_trajectory(false);  // 临时Pitch测试：退出时复位
+        break;
+      case sp::DBusSwitchMode::MID:
+      case sp::DBusSwitchMode::UP:
+        test_pitch_trajectory(motors_alive);  // 临时Pitch测试
+
+        //hold_arm(motor1_zero, motor2_zero, motor3_zero);  //保持机械臂
+        // test_yaw_trajectory(motor1.is_alive(osKernelSysTick()));  // 临时Yaw测试
+
+        // if (dbus_sw_l == sp::DBusSwitchMode::UP) {
+        //   track_arm(motor1_zero, motor2_zero, motor3_zero);
+        // }
+        // else {
+        //   track_latched = false;
+        //   hold_arm(motor1_zero, motor2_zero, motor3_zero);
+        // }
+        break;
+    }
+
+    osDelay(1);
+  }
+}
+
+static float friction_feedforward(float error, float torque)
+{
+  return torque * std::tanh(error / FRICTION_TRANSITION_RAD);
+}
+
 static void test_pitch_trajectory(bool enabled)
 {
   constexpr float kDeg = 3.14159265f / 180.0f;
@@ -104,8 +180,8 @@ static void test_pitch_trajectory(bool enabled)
   }
 
   if (pitch_test_stage == 3) return;
-  const bool reached = pitch_test_stage == 1 ? std::abs(motor3.angle - arm_target) < 2.0f * kDeg
-                                             : std::abs(imu.pitch) < 1.0f * kDeg;
+  const bool reached = pitch_test_stage == 1 ? std::abs(motor3.angle - arm_target) < 2.5f * kDeg
+                                             : std::abs(imu.pitch) < 2.5f * kDeg;
   if (!reached) {
     settling = false;
     return;
@@ -162,7 +238,11 @@ static void test_yaw_trajectory(bool enabled)
   const float target =
     angle0 + trajectory_sample_at_ms(now - start_ms).yaw - trajectory_sample_at_ms(0).yaw;
   motor1_pid_angle.calc(target, motor1.angle);
-  motor1.cmd(motor1_pid_angle.out);
+  motor1.cmd(
+    sp::limit_max(
+      motor1_pid_angle.out +
+        friction_feedforward(motor1_pid_angle.data.err[0], MOTOR1_FRICTION_TORQUE),
+      MOTOR1_MAX_TORQUE));
   motor2.cmd(0.0f);
   motor3.cmd(0.0f);
 
@@ -174,63 +254,6 @@ static void test_yaw_trajectory(bool enabled)
   can1.send(motor3.tx_id);
 }
 // ==================== 临时Yaw测试结束 ====================
-
-extern "C" void control_task(void * argument)
-{
-  can1.config();
-  can1.start();
-
-  can2.config();
-  can2.start();
-
-  //电机初始化确认
-  bool motor_ready = false;
-  float motor1_zero = motor1.angle;
-  float motor2_zero = motor2.angle;
-  float motor3_zero = motor3.angle;
-
-  while (1) {
-    if (!motor3_horizontal_ready && motor3.is_alive(osKernelSysTick())) {
-      motor3_horizontal_angle = motor3.angle;
-      motor3_horizontal_ready = true;
-    }
-    if (osKernelSysTick() - connect_last_rx_ms > CONNECT_OFFLINE_MS) {
-      dbus_sw_r = sp::DBusSwitchMode::DOWN;
-    }
-    //电机初始化确认，防止初始化电机读取有问题后续伤害机械结构
-    bool motors_alive = motor1.is_alive(osKernelSysTick()) && motor2.is_alive(osKernelSysTick()) &&
-                        motor3.is_alive(osKernelSysTick());
-    if (motors_alive && !motor_ready) {
-      motor_ready = true;
-      motor1_zero = motor1.angle;
-      motor2_zero = motor2.angle;
-      motor3_zero = motor3.angle;
-    }
-
-    switch (dbus_sw_r) {
-      case sp::DBusSwitchMode::DOWN:  //右拨杆下档，失能
-        track_latched = false;
-        test_pitch_trajectory(false);  // 临时Pitch测试：退出时复位
-        break;
-      case sp::DBusSwitchMode::MID:
-      case sp::DBusSwitchMode::UP:
-        test_pitch_trajectory(motors_alive);  // 临时Pitch测试
-        //drive_motor(motor1_zero, motor2_zero, motor3_zero - 1.0f);  //驱动电机
-        // hold_arm(motor1_zero, motor2_zero, motor3_zero);  //保持机械臂
-        // test_yaw_trajectory(motor1.is_alive(osKernelSysTick()));  // 临时Yaw测试
-        // if (dbus_sw_l == sp::DBusSwitchMode::UP) {
-        //   track_arm(motor1_zero, motor2_zero, motor3_zero);
-        // }
-        // else {
-        //   track_latched = false;
-        //   hold_arm(motor1_zero, motor2_zero, motor3_zero);
-        // }
-        break;
-    }
-
-    osDelay(1);
-  }
-}
 
 extern "C" void lose_power()  //失能函数
 {
@@ -261,14 +284,24 @@ static void drive_motor_feedback(
   motor2_pid_angle.calc(motor2_set, motor2_feedback);
   motor3_pid_angle.calc(motor3_set, motor3.angle);
 
-  motor1.cmd(motor1_pid_angle.out);
-  motor2.cmd(motor2_pid_angle.out);
+  motor1.cmd(
+    sp::limit_max(
+      motor1_pid_angle.out +
+        friction_feedforward(motor1_pid_angle.data.err[0], MOTOR1_FRICTION_TORQUE),
+      MOTOR1_MAX_TORQUE));
+  motor2.cmd(
+    sp::limit_max(
+      motor2_pid_angle.out +
+        friction_feedforward(motor2_pid_angle.data.err[0], MOTOR2_FRICTION_TORQUE),
+      MOTOR2_MAX_TORQUE));
   // ==================== motor3重力前馈 ====================
   // 负向转动为抬升，水平夹角 = -(当前角度 - 上电水平角度)，单位rad。
   const float arm_pitch = -(motor3.angle - motor3_horizontal_angle);
   motor3_gravity_ff = motor3_horizontal_ready ? -MOTOR3_GRAVITY_TORQUE * std::cos(arm_pitch) : 0.0f;
-  const float motor3_torque =
-    sp::limit_max(motor3_pid_angle.out + motor3_gravity_ff, MOTOR3_MAX_TORQUE);
+  const float motor3_torque = sp::limit_max(
+    motor3_pid_angle.out + motor3_gravity_ff +
+      friction_feedforward(motor3_pid_angle.data.err[0], MOTOR3_FRICTION_TORQUE),
+    MOTOR3_MAX_TORQUE);
   motor3.cmd(motor3_horizontal_ready ? motor3_torque : 0.0f);
   // ==================== motor3重力前馈结束 ====================
 

@@ -16,6 +16,7 @@ extern sp::PID motor3_pid_angle;
 
 extern sp::Mahony imu;
 extern float pitch_test_target;
+extern float motor3_gravity_ff;
 
 sp::Plotter plotter(&huart1, false);
 
@@ -31,6 +32,11 @@ extern "C" void plotter_task(void * argument)
       motor3_pid_angle.out);  //调试电机2和电机3
     // plotter.plot(motor3.angle, motor3_pid_angle.out, (float)(laser.distance));  //调试电机3
     //plotter.plot((float)(laser.distance));
+    // plotter.plot(
+    //   motor3_pid_angle.data.set,  // 目标
+    //   motor3.angle,               // 实际角度
+    //   motor3_pid_angle.data.pout, motor3_pid_angle.data.iout, motor3_gravity_ff,
+    //   motor3.torque);  // 电流换算的反馈力矩
     osDelay(10);
   }
 }

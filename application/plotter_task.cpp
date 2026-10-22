@@ -4,6 +4,7 @@
 #include "motor/rm_motor/rm_motor.hpp"
 #include "tools/mahony/mahony.hpp"
 #include "tools/pid/pid.hpp"
+#include "tracking_score.hpp"
 
 extern Laser laser;
 extern sp::RM_Motor motor1;
@@ -13,6 +14,7 @@ extern sp::RM_Motor motor3;
 extern sp::PID motor1_pid_angle;
 extern sp::PID motor1_pid_speed;
 extern sp::PID motor2_pid_angle;
+extern sp::PID motor2_pid_speed;
 extern sp::PID motor3_pid_angle;
 extern float motor2_torque_cmd;
 extern float motor3_torque_cmd;
@@ -32,13 +34,13 @@ extern "C" void plotter_task(void * argument)
     // ==================== 临时Yaw轨迹对比结束 ====================
     // 临时Pitch测试：目标、实际姿态，单位rad。
     // 双环调试：每个电机依次输出角度目标、角度反馈、速度目标、实际速度、最终力矩。
-    plotter.plot(
-      motor1_pid_angle.data.set, imu.yaw, motor1.angle, motor1.speed, motor1_pid_speed.data.set,
-      motor1_pid_speed.out);
     // plotter.plot(
-    //   motor2_pid_angle.data.set, imu.pitch, motor2.angle, motor2.speed, motor2_pid_angle.out,
-    //   motor2_torque_cmd, motor3.angle, motor3.speed);
-    // motor2单环：第5通道为角度PID力矩，第6通道为最终命令力矩（N·m）。
+    //   motor1_pid_angle.data.set, imu.yaw, motor1.angle, motor1.speed, motor1_pid_speed.data.set,
+    //   motor1_pid_speed.out);
+    plotter.plot(
+      motor2_pid_angle.data.set, imu.pitch, motor2.angle, motor2.speed, motor2_pid_speed.data.set,
+      motor2_pid_speed.out, pitch_score);
+    // motor2双环：第5通道为目标速度(rad/s)，第6通道为最终命令力矩(N·m)。
     // plotter.plot(motor3.angle, motor3_pid_angle.out, (float)(laser.distance));  //调试电机3
     //plotter.plot((float)(laser.distance));
     // plotter.plot(

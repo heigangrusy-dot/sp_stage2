@@ -1,5 +1,6 @@
 #include <cmath>
 
+#include "FreeRTOS.h"
 #include "cmsis_os.h"
 #include "io/bmi088/bmi088.hpp"
 #include "io/can/can.hpp"
@@ -7,8 +8,10 @@
 #include "laser.hpp"
 #include "motor/rm_motor/rm_motor.hpp"
 #include "motor_limit.hpp"
+#include "task.h"
 #include "tools/mahony/mahony.hpp"
 #include "tools/pid/pid.hpp"
+#include "tracking_score.hpp"
 #include "trajectory_task.hpp"
 
 sp::RM_Motor motor1(1, sp::RM_Motors::GM6020);                //云台底部，用can2
@@ -16,16 +19,18 @@ sp::RM_Motor motor2(2, sp::RM_Motors::GM6020);                //侧面用can1
 sp::RM_Motor motor3(3, sp::RM_Motors::M2006, sp::M2006_P36);  //侧面用can1
 
 //云台底部yaw电机：角度环输出rad/s，速度环输出N·m
-sp::PID motor1_pid_speed(0.001f, 0.35f, 0.0f, 0.0f, 2.5f, 1.5f, 1.0f, false, true);
-sp::PID motor1_pid_angle(0.001f, 56.0f, 0.0f, 0.4f, 10.0f, 1.5f, 0.8f, false, true);
+sp::PID motor1_pid_speed(0.001f, 0.19f, 0.0f, 0.0f, 2.5f, 1.5f, 1.0f, false, true);
+sp::PID motor1_pid_angle(0.001f, 15.0f, 0.0f, 0.4f, 10.0f, 1.5f, 0.8f, false, true);
 
 //云台侧面摆头pitch电机
-// 单角度环：rad -> N·m；Pitch测试使用imu.pitch，普通保持使用motor2.angle。
-sp::PID motor2_pid_angle(0.001f, 0.8f, 0.52f, 0.001f, 1.0f, 0.25f, 0.5f, false, true);
-//0.001f, 0.8f, 0.5f, 0.001f, 1.0f, 0.3f, 1.0f, false, true
+// 双环：角度环rad -> rad/s，速度环rad/s -> N·m。
+// Pitch测试外环使用imu.pitch，内环使用motor2.speed；普通保持外环使用motor2.angle。
+sp::PID motor2_pid_speed(0.001f, 0.02f, 0.0f, 0.0f, 1.0f, 0.25f, 0.3f, false, true);
+sp::PID motor2_pid_angle(0.001f, 5.0f, 0.0f, 0.0f, 10.0f, 0.25f, 0.3f, false, true);
+//0.001f, 0.8025f, 0.52f, 0.0f, 1.0f, 0.25f, 0.3f, false, true
 
 //云台侧面摆臂pitch电机：单角度环输出N·m
-sp::PID motor3_pid_angle(0.001f, 0.425f, 0.1f, 0.031f, 10.0f, 0.1f, 0.5f, false, true);
+sp::PID motor3_pid_angle(0.001f, 0.375f, 0.1f, 0.031f, 10.0f, 0.1f, 0.5f, false, true);
 //0.001f, 0.42f, 0.1f, 0.03f, 1.0f, 0.1f, 0.5f, false, true
 sp::CAN can1(&hcan1);
 sp::CAN can2(&hcan2);
@@ -43,17 +48,17 @@ static bool motor3_horizontal_ready = false;
 float motor3_gravity_ff = 0.0f;  // 调试观察：实际加入的重力前馈
 float motor1_torque_cmd = 0.0f;
 float motor1_accel_ff = 0.0f;    // 调试：Yaw轨迹加速度前馈力矩，N·m
-float motor2_torque_cmd = 0.0f;  // 角度环与前馈叠加、限幅后的命令，N·m
+float motor2_torque_cmd = 0.0f;  // 速度环与前馈叠加、限幅后的命令，N·m
 float motor3_torque_cmd = 0.0f;
 // ==================== motor3重力前馈结束 ====================
 
 constexpr uint32_t CONNECT_OFFLINE_MS = 50;
-constexpr float MOTOR3_NORMAL_RAD = -3.14159265f / 3.0f;     // -60°
+constexpr float MOTOR3_NORMAL_RAD = -1.25f;                  // -60°
 constexpr float MOTOR2_TRACK_ZERO_RAD = 3.14159265f / 4.0f;  // 45°
 constexpr float MOTOR3_FOLD_RAD = -3.14159265f / 12.0f;      // -30°
 constexpr uint16_t FOLD_DISTANCE_CM = 40;                    //想一直处于初始状态则值调为大于200即可
 constexpr float ARM_RESET_MOTOR1_RAD = -2.15f;
-constexpr float ARM_RESET_MOTOR3_RAD = -1.0f;
+constexpr float ARM_RESET_MOTOR3_RAD = -1.25f;
 constexpr float ARM_FOLD_MOTOR3_RAD = -0.2f;
 constexpr uint32_t FOLD_RESET_DELAY_MS = 2000;
 constexpr uint32_t LASER_FRESH_MS = 500;
@@ -71,10 +76,10 @@ float track_yaw0 = 0.0f;
 float track_pitch0 = 0.0f;
 
 // 平滑摩擦补偿：按误差方向补偿，接近目标时连续减小至0。
-constexpr float MOTOR1_FRICTION_TORQUE = 0.044f;                        // N·m
-constexpr float MOTOR2_FRICTION_TORQUE = 0.0f;                          // N·m 0.155f
+constexpr float MOTOR1_FRICTION_TORQUE = 0.0f;                          // N·m
+constexpr float MOTOR2_FRICTION_TORQUE = 0.40f;                         // N·m 0.155f
 constexpr float MOTOR3_FRICTION_TORQUE = 0.1f;                          // N·m
-constexpr float FRICTION_TRANSITION_RAD = 3.0f * 3.14159265f / 180.0f;  // 过渡角度3°
+constexpr float FRICTION_TRANSITION_RAD = 2.5f * 3.14159265f / 180.0f;  // 过渡角度2.5°
 constexpr float MOTOR1_MAX_TORQUE = 2.5f;
 constexpr float MOTOR2_MAX_TORQUE = 1.0f;
 static float friction_feedforward(float error, float torque);
@@ -92,11 +97,13 @@ static void drive_motor_feedback(
 // 0=未启动，1=motor3抬升，2=Pitch回零，3=轨迹跟踪。
 int pitch_test_stage = 0;
 float pitch_test_target = 0.0f;
+float yaw_ratio = 0.0f, pitch_ratio = 0.0f;
+float yaw_score = 0.0f, pitch_score = 0.0f;
 
 // 绝对编码器角度限位，单位rad；边界值允许。
-constexpr float MOTOR1_MIN_ANGLE = -3.0f, MOTOR1_MAX_ANGLE = -1.3f;
-constexpr float MOTOR2_MIN_ANGLE = 2.8f, MOTOR2_MAX_ANGLE = 4.2f;
-constexpr float MOTOR3_MIN_ANGLE = -1.9f, MOTOR3_MAX_ANGLE = 0.05f;
+constexpr float MOTOR1_MIN_ANGLE = -3.8f, MOTOR1_MAX_ANGLE = 4.2f;  //-3.0 -1.3
+constexpr float MOTOR2_MIN_ANGLE = -10.0f, MOTOR2_MAX_ANGLE = 10.0f;
+constexpr float MOTOR3_MIN_ANGLE = -3.8f, MOTOR3_MAX_ANGLE = 4.2f;  //-1.9 0.25
 volatile MotorLimitState motor_limit_state = MotorLimitState::NORMAL;
 static bool motor_limit_blocked(bool feedback_valid, uint32_t now);
 
@@ -114,6 +121,7 @@ extern "C" void control_task(void * argument)
   float motor2_zero = motor2.angle;
   float motor3_zero = motor3.angle;
 
+  TickType_t control_wake_tick = xTaskGetTickCount();
   while (1) {
     if (!motor3_horizontal_ready && motor3.is_alive(osKernelSysTick())) {
       motor3_horizontal_angle = motor3.angle;
@@ -137,7 +145,7 @@ extern "C" void control_task(void * argument)
       pitch_test_stage = 0;
       pitch_test_target = 0.0f;
       test_yaw_trajectory(false);  // 失能、清空PID并重置Yaw测试起点
-      osDelay(1);
+      vTaskDelayUntil(&control_wake_tick, pdMS_TO_TICKS(1));
       continue;
     }
 
@@ -148,9 +156,9 @@ extern "C" void control_task(void * argument)
         break;
       case sp::DBusSwitchMode::MID:
       case sp::DBusSwitchMode::UP:
-        //test_pitch_trajectory(motors_alive);  // 临时Pitch测试
+        test_pitch_trajectory(motors_alive);  // 临时Pitch测试
 
-        hold_arm(motor1_zero, motor2_zero, motor3_zero);  // 复位/避障折叠
+        //hold_arm(motor1_zero, motor2_zero, motor3_zero);  // 复位/避障折叠
         //test_yaw_trajectory(motor1.is_alive(osKernelSysTick()));  // 临时Yaw测试
         //drive_motor(motor1_zero + 1.0f, motor2_zero, motor3_zero);  //保持机械臂
         // if (dbus_sw_l == sp::DBusSwitchMode::UP) {
@@ -163,7 +171,7 @@ extern "C" void control_task(void * argument)
         break;
     }
 
-    osDelay(1);
+    vTaskDelayUntil(&control_wake_tick, pdMS_TO_TICKS(1));
   }
 }
 
@@ -216,7 +224,7 @@ static void test_pitch_trajectory(bool enabled)
   }
 
   const uint32_t now = osKernelSysTick();
-  const float arm_target = motor3_horizontal_angle - 60.0f * kDeg;
+  const float arm_target = ARM_RESET_MOTOR3_RAD;  // 与复位状态共用同一个绝对角度目标
   if (pitch_test_stage == 0) {
     settling = false;
     yaw_hold = motor1.angle;
@@ -224,6 +232,7 @@ static void test_pitch_trajectory(bool enabled)
     motor1_pid_angle.clear();
     motor1_pid_speed.clear();
     motor2_pid_angle.clear();
+    motor2_pid_speed.clear();
     motor3_pid_angle.clear();
     pitch_test_stage = 1;
   }
@@ -238,7 +247,11 @@ static void test_pitch_trajectory(bool enabled)
     drive_motor_feedback(yaw_hold, pitch_test_target, arm_target, imu.pitch);
   }
 
-  if (pitch_test_stage == 3) return;
+  if (pitch_test_stage == 3) {
+    pitch_detect(imu.pitch, pitch_test_target, &pitch_ratio);
+    pitch_score = 100.0f * pitch_ratio;
+    return;
+  }
   const bool reached = pitch_test_stage == 1 ? std::abs(motor3.angle - arm_target) < 2.5f * kDeg
                                              : std::abs(imu.pitch) < 2.5f * kDeg;
   if (!reached) {
@@ -254,6 +267,7 @@ static void test_pitch_trajectory(bool enabled)
 
   if (pitch_test_stage == 1) {
     motor2_pid_angle.clear();  // 从编码器闭环切换到IMU闭环
+    motor2_pid_speed.clear();
     pitch_test_stage = 2;
   }
   else {
@@ -268,6 +282,8 @@ static void test_pitch_trajectory(bool enabled)
       }
     }
     track_start = osKernelSysTick();
+    pitch_ratio = 0.0f;
+    pitch_score = 0.0f;  // 仅从正式轨迹阶段开始评分，不计抬升/回零
     pitch_test_stage = 3;
   }
 }
@@ -276,12 +292,13 @@ static void test_pitch_trajectory(bool enabled)
 // ==================== 临时：仅测试Yaw轨迹（整段可删除） ====================
 constexpr float YAW_SPEED_FF_GAIN = 0.0f;      // 轨迹速度前馈增益，设0可关闭
 constexpr float YAW_TARGET_SPEED_MAX = 10.0f;  // 叠加后的速度限幅，rad/s
-constexpr float YAW_ACCEL_FF_GAIN = 0.008f;    // 等效惯量kg·m²，试调初值，设0可关闭
+constexpr float YAW_ACCEL_FF_GAIN = 0.00f;     // 等效惯量kg·m²，试调初值，设0可关闭
 static void test_yaw_trajectory(bool enabled)
 {
   static bool started = false;
   static uint32_t start_ms = 0;
   static float angle0 = 0.0f;
+  static float imu_yaw0 = 0.0f, imu_yaw_last = 0.0f, imu_yaw_unwrapped = 0.0f;
 
   if (!enabled) {
     started = false;
@@ -294,12 +311,23 @@ static void test_yaw_trajectory(bool enabled)
     started = true;
     start_ms = now;
     angle0 = motor1.angle;
+    imu_yaw0 = imu.yaw;
+    imu_yaw_last = imu_yaw0;
+    imu_yaw_unwrapped = imu_yaw0;
+    yaw_ratio = 0.0f;
+    yaw_score = 0.0f;
     motor1_pid_angle.clear();
     motor1_pid_speed.clear();
   }
 
   const TrajectoryPoint ref = trajectory_sample_at_ms(now - start_ms);
   const float target = angle0 + ref.yaw - trajectory_sample_at_ms(0).yaw;
+  // 在调用评分函数前统一到IMU坐标，并展开±pi跳变；评分函数本体保持原样。
+  imu_yaw_unwrapped += std::remainder(imu.yaw - imu_yaw_last, 2.0f * 3.14159265f);
+  imu_yaw_last = imu.yaw;
+  const float plan_yaw = imu_yaw0 + ref.yaw - trajectory_sample_at_ms(0).yaw;
+  yaw_detect(imu_yaw_unwrapped, plan_yaw, &yaw_ratio);
+  yaw_score = 100.0f * yaw_ratio;
   motor1_pid_angle.calc(target, motor1.angle);
   // 角度与速度使用同一次轨迹采样，角度环负责位置纠偏。
   const float speed_target =
@@ -315,6 +343,7 @@ static void test_yaw_trajectory(bool enabled)
   motor2.cmd(0.0f);
   motor3.cmd(0.0f);
   motor2_pid_angle.clear();
+  motor2_pid_speed.clear();
   motor3_pid_angle.clear();
   motor2_torque_cmd = 0.0f;
   motor3_torque_cmd = 0.0f;
@@ -337,6 +366,7 @@ extern "C" void lose_power()  //失能函数
   motor1_pid_angle.clear();
   motor1_pid_speed.clear();
   motor2_pid_angle.clear();
+  motor2_pid_speed.clear();
   motor3_pid_angle.clear();
   motor2_torque_cmd = 0.0f;
   motor3_torque_cmd = 0.0f;
@@ -366,6 +396,7 @@ static void drive_motor_feedback(
   motor1_accel_ff = 0.0f;  // 普通保持模式不使用轨迹加速度前馈
   motor1_pid_speed.calc(motor1_pid_angle.out, motor1.speed);
   motor2_pid_angle.calc(motor2_set, motor2_feedback);
+  motor2_pid_speed.calc(motor2_pid_angle.out, motor2.speed);
   motor3_pid_angle.calc(motor3_set, motor3.angle);
 
   motor1_torque_cmd = sp::limit_max(
@@ -374,7 +405,7 @@ static void drive_motor_feedback(
     MOTOR1_MAX_TORQUE);
   motor1.cmd(motor1_torque_cmd);
   motor2_torque_cmd = sp::limit_max(
-    motor2_pid_angle.out +
+    motor2_pid_speed.out +
       friction_feedforward(motor2_pid_angle.data.err[0], MOTOR2_FRICTION_TORQUE),
     MOTOR2_MAX_TORQUE);
   motor2.cmd(motor2_torque_cmd);
@@ -413,11 +444,12 @@ extern "C" void hold_arm(float, float, float)
     motor1_pid_angle.clear();
     motor1_pid_speed.clear();
     motor2_pid_angle.clear();
+    motor2_pid_speed.clear();
     motor3_pid_angle.clear();
   }
   const uint16_t distance = laser.distance;
-  const bool valid = laser.has_valid_frame && distance != 65535 &&
-                     now_ms - laser.last_valid_rx_ms <= LASER_FRESH_MS;
+  const bool valid =
+    laser.has_valid_frame && distance != 65535 && now_ms - laser.last_valid_rx_ms <= LASER_FRESH_MS;
   if (valid && distance < FOLD_DISTANCE_CM) {
     arm_folded = true;
     arm_waiting_reset = false;
@@ -437,8 +469,8 @@ extern "C" void hold_arm(float, float, float)
       }
     }
   }
-  drive_motor(ARM_RESET_MOTOR1_RAD, motor2_hold,
-    arm_folded ? ARM_FOLD_MOTOR3_RAD : ARM_RESET_MOTOR3_RAD);
+  drive_motor(
+    ARM_RESET_MOTOR1_RAD, motor2_hold, arm_folded ? ARM_FOLD_MOTOR3_RAD : ARM_RESET_MOTOR3_RAD);
 }
 
 void track_arm(float motor1_zero, float motor2_zero, float motor3_zero)
@@ -493,3 +525,34 @@ extern "C" void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef * hcan)  //C
 }
 
 //待会调试先缠电工胶布，再测试上下通信，再测试测距模块，最后测试电机
+
+// ==================== 任务提供的评分函数（保持原样） ====================
+void yaw_detect(float gimbal_angle, float plan_angle, float * fire_ratio)
+{
+  if (fire_ratio == nullptr) {
+    return;
+  }
+  constexpr float alpha = 0.001f;            // 1ms的freertos对应的滤波系数
+  constexpr float threshold = 0.5f / 57.3f;  // 角度转换成弧度
+
+  static uint8_t fire = 0;
+
+  fire = (fabs(gimbal_angle - plan_angle) < threshold) ? 1u : 0u;
+
+  *fire_ratio = alpha * static_cast<float>(fire) + (1.0f - alpha) * (*fire_ratio);
+}
+
+void pitch_detect(float gimbal_angle, float plan_angle, float * fire_ratio)
+{
+  if (fire_ratio == nullptr) {
+    return;
+  }
+  constexpr float alpha = 0.001f;            // 1ms的freertos对应的滤波系数
+  constexpr float threshold = 1.5f / 57.3f;  // 角度转换成弧度
+
+  static uint8_t fire = 0;
+
+  fire = (fabs(gimbal_angle - plan_angle) < threshold) ? 1u : 0u;
+
+  *fire_ratio = alpha * static_cast<float>(fire) + (1.0f - alpha) * (*fire_ratio);
+}

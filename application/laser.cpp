@@ -45,4 +45,6 @@ void Laser::update(uint16_t size)
   }
   distance = tx_buffer_[5] | ((uint16_t)(tx_buffer_[4]) << 8);
   temp = tx_buffer_[6];
+  last_valid_rx_ms = osKernelSysTick();
+  has_valid_frame = true;
 }

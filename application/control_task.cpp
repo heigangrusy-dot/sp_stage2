@@ -6,6 +6,7 @@
 #include "io/dbus/dbus.hpp"
 #include "laser.hpp"
 #include "motor/rm_motor/rm_motor.hpp"
+#include "motor_limit.hpp"
 #include "tools/mahony/mahony.hpp"
 #include "tools/pid/pid.hpp"
 #include "trajectory_task.hpp"
@@ -14,13 +15,17 @@ sp::RM_Motor motor1(1, sp::RM_Motors::GM6020);                //云台底部，�
 sp::RM_Motor motor2(2, sp::RM_Motors::GM6020);                //侧面用can1
 sp::RM_Motor motor3(3, sp::RM_Motors::M2006, sp::M2006_P36);  //侧面用can1
 
-sp::PID motor1_pid_angle(
-  0.001f, 0.75f, 0.0f, 0.01f, 2.5f, 1.5f, 0.5f, false, true);  //云台底部yaw电机
-sp::PID motor2_pid_angle(
-  0.001f, 0.71f, 0.52f, 0.0025f, 1.0f, 0.25f, 0.5f, false, true);  //云台侧面摆头pitch电机
+//云台底部yaw电机：角度环输出rad/s，速度环输出N·m
+sp::PID motor1_pid_speed(0.001f, 0.35f, 0.0f, 0.0f, 2.5f, 1.5f, 1.0f, false, true);
+sp::PID motor1_pid_angle(0.001f, 56.0f, 0.0f, 0.4f, 10.0f, 1.5f, 0.8f, false, true);
+
+//云台侧面摆头pitch电机
+// 单角度环：rad -> N·m；Pitch测试使用imu.pitch，普通保持使用motor2.angle。
+sp::PID motor2_pid_angle(0.001f, 0.8f, 0.52f, 0.001f, 1.0f, 0.25f, 0.5f, false, true);
 //0.001f, 0.8f, 0.5f, 0.001f, 1.0f, 0.3f, 1.0f, false, true
-sp::PID motor3_pid_angle(
-  0.001f, 0.425f, 0.1f, 0.031f, 1.0f, 0.1f, 0.5f, false, true);  //云台侧面摆臂pitch电机
+
+//云台侧面摆臂pitch电机：单角度环输出N·m
+sp::PID motor3_pid_angle(0.001f, 0.425f, 0.1f, 0.031f, 10.0f, 0.1f, 0.5f, false, true);
 //0.001f, 0.42f, 0.1f, 0.03f, 1.0f, 0.1f, 0.5f, false, true
 sp::CAN can1(&hcan1);
 sp::CAN can2(&hcan2);
@@ -36,6 +41,10 @@ constexpr float MOTOR3_MAX_TORQUE = 2.5f;      // PID与前馈叠加后的限幅
 static float motor3_horizontal_angle = 0.0f;
 static bool motor3_horizontal_ready = false;
 float motor3_gravity_ff = 0.0f;  // 调试观察：实际加入的重力前馈
+float motor1_torque_cmd = 0.0f;
+float motor1_accel_ff = 0.0f;    // 调试：Yaw轨迹加速度前馈力矩，N·m
+float motor2_torque_cmd = 0.0f;  // 角度环与前馈叠加、限幅后的命令，N·m
+float motor3_torque_cmd = 0.0f;
 // ==================== motor3重力前馈结束 ====================
 
 constexpr uint32_t CONNECT_OFFLINE_MS = 50;
@@ -43,7 +52,12 @@ constexpr float MOTOR3_NORMAL_RAD = -3.14159265f / 3.0f;     // -60°
 constexpr float MOTOR2_TRACK_ZERO_RAD = 3.14159265f / 4.0f;  // 45°
 constexpr float MOTOR3_FOLD_RAD = -3.14159265f / 12.0f;      // -30°
 constexpr uint16_t FOLD_DISTANCE_CM = 40;                    //想一直处于初始状态则值调为大于200即可
-constexpr uint32_t FOLD_RESET_DELAY_MS = 1000;
+constexpr float ARM_RESET_MOTOR1_RAD = -2.15f;
+constexpr float ARM_RESET_MOTOR3_RAD = -1.0f;
+constexpr float ARM_FOLD_MOTOR3_RAD = -0.2f;
+constexpr uint32_t FOLD_RESET_DELAY_MS = 2000;
+constexpr uint32_t LASER_FRESH_MS = 500;
+static bool hold_arm_started = false;
 
 //折叠复位功能相关标志
 uint32_t connect_last_rx_ms = 0;
@@ -58,7 +72,7 @@ float track_pitch0 = 0.0f;
 
 // 平滑摩擦补偿：按误差方向补偿，接近目标时连续减小至0。
 constexpr float MOTOR1_FRICTION_TORQUE = 0.044f;                        // N·m
-constexpr float MOTOR2_FRICTION_TORQUE = 0.155f;                        // N·m
+constexpr float MOTOR2_FRICTION_TORQUE = 0.0f;                          // N·m 0.155f
 constexpr float MOTOR3_FRICTION_TORQUE = 0.1f;                          // N·m
 constexpr float FRICTION_TRANSITION_RAD = 3.0f * 3.14159265f / 180.0f;  // 过渡角度3°
 constexpr float MOTOR1_MAX_TORQUE = 2.5f;
@@ -78,6 +92,13 @@ static void drive_motor_feedback(
 // 0=未启动，1=motor3抬升，2=Pitch回零，3=轨迹跟踪。
 int pitch_test_stage = 0;
 float pitch_test_target = 0.0f;
+
+// 绝对编码器角度限位，单位rad；边界值允许。
+constexpr float MOTOR1_MIN_ANGLE = -3.0f, MOTOR1_MAX_ANGLE = -1.3f;
+constexpr float MOTOR2_MIN_ANGLE = 2.8f, MOTOR2_MAX_ANGLE = 4.2f;
+constexpr float MOTOR3_MIN_ANGLE = -1.9f, MOTOR3_MAX_ANGLE = 0.05f;
+volatile MotorLimitState motor_limit_state = MotorLimitState::NORMAL;
+static bool motor_limit_blocked(bool feedback_valid, uint32_t now);
 
 extern "C" void control_task(void * argument)
 {
@@ -111,6 +132,15 @@ extern "C" void control_task(void * argument)
       motor3_zero = motor3.angle;
     }
 
+    if (motor_limit_blocked(motors_alive, osKernelSysTick())) {
+      track_latched = false;
+      pitch_test_stage = 0;
+      pitch_test_target = 0.0f;
+      test_yaw_trajectory(false);  // 失能、清空PID并重置Yaw测试起点
+      osDelay(1);
+      continue;
+    }
+
     switch (dbus_sw_r) {
       case sp::DBusSwitchMode::DOWN:  //右拨杆下档，失能
         track_latched = false;
@@ -120,8 +150,8 @@ extern "C" void control_task(void * argument)
       case sp::DBusSwitchMode::UP:
         //test_pitch_trajectory(motors_alive);  // 临时Pitch测试
 
-        //hold_arm(motor1_zero, motor2_zero, motor3_zero);  //保持机械臂
-        test_yaw_trajectory(motor1.is_alive(osKernelSysTick()));  // 临时Yaw测试
+        hold_arm(motor1_zero, motor2_zero, motor3_zero);  // 复位/避障折叠
+        //test_yaw_trajectory(motor1.is_alive(osKernelSysTick()));  // 临时Yaw测试
         //drive_motor(motor1_zero + 1.0f, motor2_zero, motor3_zero);  //保持机械臂
         // if (dbus_sw_l == sp::DBusSwitchMode::UP) {
         //   track_arm(motor1_zero, motor2_zero, motor3_zero);
@@ -135,6 +165,33 @@ extern "C" void control_task(void * argument)
 
     osDelay(1);
   }
+}
+
+static bool motor_limit_blocked(bool feedback_valid, uint32_t now)
+{
+  static uint32_t recovery_start = 0;
+  if (!feedback_valid) {
+    // 未收到全部有效反馈前禁止运行；故障恢复期间掉线则重新等待。
+    if (motor_limit_state != MotorLimitState::NORMAL)
+      motor_limit_state = MotorLimitState::OUT_OF_RANGE;
+    return true;
+  }
+  const bool in_range = std::isfinite(motor1.angle) && motor1.angle >= MOTOR1_MIN_ANGLE &&
+                        motor1.angle <= MOTOR1_MAX_ANGLE && std::isfinite(motor2.angle) &&
+                        motor2.angle >= MOTOR2_MIN_ANGLE && motor2.angle <= MOTOR2_MAX_ANGLE &&
+                        std::isfinite(motor3.angle) && motor3.angle >= MOTOR3_MIN_ANGLE &&
+                        motor3.angle <= MOTOR3_MAX_ANGLE;
+  if (!in_range) {
+    motor_limit_state = MotorLimitState::OUT_OF_RANGE;
+    return true;
+  }
+  if (motor_limit_state == MotorLimitState::OUT_OF_RANGE) {
+    recovery_start = now;
+    motor_limit_state = MotorLimitState::RECOVERING;
+  }
+  if (motor_limit_state == MotorLimitState::RECOVERING && now - recovery_start >= 10000U)
+    motor_limit_state = MotorLimitState::NORMAL;
+  return motor_limit_state != MotorLimitState::NORMAL;
 }
 
 static float friction_feedforward(float error, float torque)
@@ -161,9 +218,11 @@ static void test_pitch_trajectory(bool enabled)
   const uint32_t now = osKernelSysTick();
   const float arm_target = motor3_horizontal_angle - 60.0f * kDeg;
   if (pitch_test_stage == 0) {
+    settling = false;
     yaw_hold = motor1.angle;
     motor2_hold = motor2.angle;
     motor1_pid_angle.clear();
+    motor1_pid_speed.clear();
     motor2_pid_angle.clear();
     motor3_pid_angle.clear();
     pitch_test_stage = 1;
@@ -215,6 +274,9 @@ static void test_pitch_trajectory(bool enabled)
 // ==================== 临时Pitch测试结束 ====================
 
 // ==================== 临时：仅测试Yaw轨迹（整段可删除） ====================
+constexpr float YAW_SPEED_FF_GAIN = 0.0f;      // 轨迹速度前馈增益，设0可关闭
+constexpr float YAW_TARGET_SPEED_MAX = 10.0f;  // 叠加后的速度限幅，rad/s
+constexpr float YAW_ACCEL_FF_GAIN = 0.008f;    // 等效惯量kg·m²，试调初值，设0可关闭
 static void test_yaw_trajectory(bool enabled)
 {
   static bool started = false;
@@ -233,18 +295,30 @@ static void test_yaw_trajectory(bool enabled)
     start_ms = now;
     angle0 = motor1.angle;
     motor1_pid_angle.clear();
+    motor1_pid_speed.clear();
   }
 
-  const float target =
-    angle0 + trajectory_sample_at_ms(now - start_ms).yaw - trajectory_sample_at_ms(0).yaw;
+  const TrajectoryPoint ref = trajectory_sample_at_ms(now - start_ms);
+  const float target = angle0 + ref.yaw - trajectory_sample_at_ms(0).yaw;
   motor1_pid_angle.calc(target, motor1.angle);
-  motor1.cmd(
-    sp::limit_max(
-      motor1_pid_angle.out +
-        friction_feedforward(motor1_pid_angle.data.err[0], MOTOR1_FRICTION_TORQUE),
-      MOTOR1_MAX_TORQUE));
+  // 角度与速度使用同一次轨迹采样，角度环负责位置纠偏。
+  const float speed_target =
+    sp::limit_max(motor1_pid_angle.out + YAW_SPEED_FF_GAIN * ref.yaw_vel, YAW_TARGET_SPEED_MAX);
+  motor1_pid_speed.calc(speed_target, motor1.speed);
+  // 与角度、速度目标使用同一次采样；加速度前馈直接作用于力矩层。
+  motor1_accel_ff = YAW_ACCEL_FF_GAIN * ref.yaw_acc;
+  motor1_torque_cmd = sp::limit_max(
+    motor1_pid_speed.out + motor1_accel_ff +
+      friction_feedforward(motor1_pid_angle.data.err[0], MOTOR1_FRICTION_TORQUE),
+    MOTOR1_MAX_TORQUE);
+  motor1.cmd(motor1_torque_cmd);
   motor2.cmd(0.0f);
   motor3.cmd(0.0f);
+  motor2_pid_angle.clear();
+  motor3_pid_angle.clear();
+  motor2_torque_cmd = 0.0f;
+  motor3_torque_cmd = 0.0f;
+  motor3_gravity_ff = 0.0f;
 
   motor1.write(can2.tx_data);
   motor2.write(can1.tx_data);
@@ -257,10 +331,18 @@ static void test_yaw_trajectory(bool enabled)
 
 extern "C" void lose_power()  //失能函数
 {
+  hold_arm_started = false;
+  arm_folded = false;
+  arm_waiting_reset = false;
   motor1_pid_angle.clear();
+  motor1_pid_speed.clear();
   motor2_pid_angle.clear();
   motor3_pid_angle.clear();
+  motor2_torque_cmd = 0.0f;
+  motor3_torque_cmd = 0.0f;
   motor3_gravity_ff = 0.0f;
+  motor1_torque_cmd = 0.0f;
+  motor1_accel_ff = 0.0f;
   motor1.cmd(0.0f);
   motor2.cmd(0.0f);
   motor3.cmd(0.0f);
@@ -281,28 +363,33 @@ static void drive_motor_feedback(
   float motor1_set, float motor2_set, float motor3_set, float motor2_feedback)
 {
   motor1_pid_angle.calc(motor1_set, motor1.angle);
+  motor1_accel_ff = 0.0f;  // 普通保持模式不使用轨迹加速度前馈
+  motor1_pid_speed.calc(motor1_pid_angle.out, motor1.speed);
   motor2_pid_angle.calc(motor2_set, motor2_feedback);
   motor3_pid_angle.calc(motor3_set, motor3.angle);
 
-  motor1.cmd(
-    sp::limit_max(
-      motor1_pid_angle.out +
-        friction_feedforward(motor1_pid_angle.data.err[0], MOTOR1_FRICTION_TORQUE),
-      MOTOR1_MAX_TORQUE));
-  motor2.cmd(
-    sp::limit_max(
-      motor2_pid_angle.out +
-        friction_feedforward(motor2_pid_angle.data.err[0], MOTOR2_FRICTION_TORQUE),
-      MOTOR2_MAX_TORQUE));
+  motor1_torque_cmd = sp::limit_max(
+    motor1_pid_speed.out +
+      friction_feedforward(motor1_pid_angle.data.err[0], MOTOR1_FRICTION_TORQUE),
+    MOTOR1_MAX_TORQUE);
+  motor1.cmd(motor1_torque_cmd);
+  motor2_torque_cmd = sp::limit_max(
+    motor2_pid_angle.out +
+      friction_feedforward(motor2_pid_angle.data.err[0], MOTOR2_FRICTION_TORQUE),
+    MOTOR2_MAX_TORQUE);
+  motor2.cmd(motor2_torque_cmd);
   // ==================== motor3重力前馈 ====================
   // 负向转动为抬升，水平夹角 = -(当前角度 - 上电水平角度)，单位rad。
   const float arm_pitch = -(motor3.angle - motor3_horizontal_angle);
   motor3_gravity_ff = motor3_horizontal_ready ? -MOTOR3_GRAVITY_TORQUE * std::cos(arm_pitch) : 0.0f;
-  const float motor3_torque = sp::limit_max(
-    motor3_pid_angle.out + motor3_gravity_ff +
-      friction_feedforward(motor3_pid_angle.data.err[0], MOTOR3_FRICTION_TORQUE),
-    MOTOR3_MAX_TORQUE);
-  motor3.cmd(motor3_horizontal_ready ? motor3_torque : 0.0f);
+  motor3_torque_cmd =
+    motor3_horizontal_ready
+      ? sp::limit_max(
+          motor3_pid_angle.out + motor3_gravity_ff +
+            friction_feedforward(motor3_pid_angle.data.err[0], MOTOR3_FRICTION_TORQUE),
+          MOTOR3_MAX_TORQUE)
+      : 0.0f;
+  motor3.cmd(motor3_torque_cmd);
   // ==================== motor3重力前馈结束 ====================
 
   motor1.write(can2.tx_data);
@@ -314,31 +401,44 @@ static void drive_motor_feedback(
   can1.send(motor3.tx_id);
 }
 
-extern "C" void hold_arm(float motor1_zero, float motor2_zero, float motor3_zero)
+extern "C" void hold_arm(float, float, float)
 {
-  float motor3_set = MOTOR3_NORMAL_RAD;
-  uint32_t now_ms = osKernelSysTick();
-
-  if (laser.distance < FOLD_DISTANCE_CM) {
+  static float motor2_hold = 0.0f;
+  const uint32_t now_ms = osKernelSysTick();
+  if (!hold_arm_started) {
+    hold_arm_started = true;
+    motor2_hold = motor2.angle;  // 未指定motor2复位目标，保持进入模式时的位置
+    arm_folded = false;
+    arm_waiting_reset = false;
+    motor1_pid_angle.clear();
+    motor1_pid_speed.clear();
+    motor2_pid_angle.clear();
+    motor3_pid_angle.clear();
+  }
+  const uint16_t distance = laser.distance;
+  const bool valid = laser.has_valid_frame && distance != 65535 &&
+                     now_ms - laser.last_valid_rx_ms <= LASER_FRESH_MS;
+  if (valid && distance < FOLD_DISTANCE_CM) {
     arm_folded = true;
     arm_waiting_reset = false;
-    motor3_set = MOTOR3_FOLD_RAD;
   }
   else if (arm_folded) {
-    if (!arm_waiting_reset) {
-      arm_waiting_reset = true;
-      fold_exit_ms = now_ms;
-    }
-    if (now_ms - fold_exit_ms < FOLD_RESET_DELAY_MS) {
-      motor3_set = MOTOR3_FOLD_RAD;
+    if (!valid || distance <= FOLD_DISTANCE_CM) {
+      arm_waiting_reset = false;  // 无效/断线/等于40cm均打断连续清障计时
     }
     else {
-      arm_folded = false;
-      arm_waiting_reset = false;
+      if (!arm_waiting_reset) {
+        arm_waiting_reset = true;
+        fold_exit_ms = now_ms;
+      }
+      if (now_ms - fold_exit_ms > FOLD_RESET_DELAY_MS) {
+        arm_folded = false;
+        arm_waiting_reset = false;
+      }
     }
   }
-
-  drive_motor(motor1_zero, motor2_zero, motor3_zero + motor3_set);
+  drive_motor(ARM_RESET_MOTOR1_RAD, motor2_hold,
+    arm_folded ? ARM_FOLD_MOTOR3_RAD : ARM_RESET_MOTOR3_RAD);
 }
 
 void track_arm(float motor1_zero, float motor2_zero, float motor3_zero)

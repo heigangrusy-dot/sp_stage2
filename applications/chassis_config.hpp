@@ -27,8 +27,8 @@ constexpr float FORWARD_DECELERATION = 5.0f;
 
 // ---------- 上档自动直行 ----------
 // 下档停稳后切上档，只执行一次；距离由四轮编码器估算，打滑会产生误差。
-constexpr float AUTO_DISTANCE_M = 3.5f;
-constexpr float AUTO_SPEED_MPS = 0.5f;     // 首次验证速度，独立于遥控最高速度。
+constexpr float AUTO_DISTANCE_M = -3.8f;
+constexpr float AUTO_SPEED_MPS = -1.0f;    // 首次验证速度，独立于遥控最高速度。
 constexpr float AUTO_ACCELERATION = 0.8f;  // m/s²。
 constexpr float AUTO_DECELERATION = 1.0f;  // m/s²，实际制动仍受功率和转矩约束。
 constexpr float AUTO_POSITION_KP = 2.0f;   // 末段距离误差m -> 目标速度m/s。
@@ -36,6 +36,10 @@ constexpr float AUTO_STOP_TOLERANCE_M = 0.02f;
 constexpr uint32_t AUTO_STOP_SETTLE_MS = 200;
 constexpr uint32_t AUTO_TIMEOUT_MS = 20000;
 constexpr uint32_t AUTO_MAX_GAP_MS = 50;  // 自动过程中调度长时间中断则退出。
+// 符号约定：距离与速度必须同号，负号表示后退；规划只用幅值，方向最后乘回。
+constexpr float AUTO_DIRECTION = AUTO_DISTANCE_M >= 0.0f ? 1.0f : -1.0f;  // +1前进，-1后退。
+constexpr float AUTO_DISTANCE_ABS = AUTO_DISTANCE_M * AUTO_DIRECTION;     // 距离幅值，m。
+constexpr float AUTO_SPEED_ABS = AUTO_SPEED_MPS * AUTO_DIRECTION;         // 速度幅值，m/s。
 
 // ---------- IMU航向保持 ----------
 // C板X朝左、Y朝后；水平安装时Z仍向上，顺时针Yaw减小，方向系数取+1。
@@ -73,7 +77,7 @@ constexpr uint32_t PLOT_PERIOD_MS = 50;
 
 // ---------- 功率预测 ----------
 // 输入轮侧N·m、rad/s，输出W。
-constexpr float POWER_K1 = 4.4f;    // 转矩平方损耗系数。
+constexpr float POWER_K1 = 4.3f;    // 转矩平方损耗系数。
 constexpr float POWER_K2 = 0.013f;  // 轮速平方损耗系数。
 constexpr float POWER_K3 = 3.8f;    // 静态功耗，W。
 

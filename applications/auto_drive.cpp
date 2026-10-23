@@ -5,8 +5,8 @@
 #include "chassis_config.hpp"
 
 static_assert(
-  chassis_config::AUTO_DISTANCE_M > chassis_config::AUTO_STOP_TOLERANCE_M &&
-  chassis_config::AUTO_STOP_TOLERANCE_M > 0.0f && chassis_config::AUTO_SPEED_MPS > 0.0f &&
+  chassis_config::AUTO_DISTANCE_ABS > chassis_config::AUTO_STOP_TOLERANCE_M &&
+  chassis_config::AUTO_STOP_TOLERANCE_M > 0.0f && chassis_config::AUTO_SPEED_ABS > 0.0f &&
   chassis_config::AUTO_ACCELERATION > 0.0f && chassis_config::AUTO_DECELERATION > 0.0f &&
   chassis_config::AUTO_POSITION_KP > 0.0f && chassis_config::AUTO_TIMEOUT_MS > 0 &&
   chassis_config::AUTO_MAX_GAP_MS > 0 && chassis_config::AUTO_STOP_SETTLE_MS > 0);
@@ -60,21 +60,29 @@ float update_auto_drive(
   state.last_update_ms = now_ms;
   state.distance = position - state.start_position;
 
-  const float remaining = chassis_config::AUTO_DISTANCE_M - state.distance;
+  // 沿目标方向的进度与剩余距离均为非负标量，前进/后退同一套公式。
+  const float progress = state.distance * chassis_config::AUTO_DIRECTION;
+  float remaining = chassis_config::AUTO_DISTANCE_ABS - progress;
+  if (remaining < 0.0f) remaining = 0.0f;  // 过冲后不反向追补。
+  if (remaining > chassis_config::AUTO_DISTANCE_ABS) remaining = chassis_config::AUTO_DISTANCE_ABS;
   if (remaining <= chassis_config::AUTO_STOP_TOLERANCE_M) state.phase = AutoDrivePhase::STOPPING;
 
-  // ---------- 接近终点减速 ----------
-  float target = 0.0f;
+  // ---------- 接近终点减速：只规划幅值，方向最后统一乘回 ----------
+  float target_magnitude = 0.0f;
   if (state.phase == AutoDrivePhase::RUNNING) {
     // 制动距离约束与末段位置比例共同降低速度，不向后追补过冲。
     const float brake_speed = std::sqrt(2.0f * chassis_config::AUTO_DECELERATION * remaining);
-    target = chassis_config::AUTO_SPEED_MPS;
-    if (target > brake_speed) target = brake_speed;
     const float approach_speed = chassis_config::AUTO_POSITION_KP * remaining;
-    if (target > approach_speed) target = approach_speed;
+    target_magnitude = chassis_config::AUTO_SPEED_ABS;
+    if (target_magnitude > brake_speed) target_magnitude = brake_speed;
+    if (target_magnitude > approach_speed) target_magnitude = approach_speed;
   }
-  const float rate = target > state.speed_command ? chassis_config::AUTO_ACCELERATION
-                                                  : chassis_config::AUTO_DECELERATION;
+  const float target = chassis_config::AUTO_DIRECTION * target_magnitude;
+
+  // 幅值变大走加速度、变小走减速度，与前进/后退无关。
+  const float rate = target_magnitude > std::abs(state.speed_command)
+                       ? chassis_config::AUTO_ACCELERATION
+                       : chassis_config::AUTO_DECELERATION;
   const float step = rate * (gap_ms * 0.001f);
   float change = target - state.speed_command;
   if (change > step) change = step;

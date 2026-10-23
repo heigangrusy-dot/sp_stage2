@@ -52,6 +52,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     applications/remote_task.cpp
     applications/control_safety.cpp
     applications/chassis_task.cpp
+    applications/auto_drive.cpp
     applications/connect_task.cpp
     applications/power_meter.cpp
     applications/chassis_power.cpp

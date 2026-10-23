@@ -1,6 +1,7 @@
 #include <cmath>
 
 #include "FreeRTOS.h"
+#include "auto_drive.hpp"
 #include "chassis_config.hpp"
 #include "chassis_power.hpp"
 #include "cmsis_os.h"
@@ -22,6 +23,8 @@ extern SchoolPm02 pm02;
 
 namespace
 {
+bool auto_complete = false;
+
 enum WheelIndex
 {
   LEFT_FRONT,
@@ -61,6 +64,7 @@ sp::Mecanum mecanum(
 struct ChassisInput
 {
   float wheel_speeds[WHEEL_COUNT] = {};
+  float forward_position = 0.0f;
   bool motors_ready = false;
   bool can_ready = false;
   bool remote_valid = false;
@@ -85,6 +89,10 @@ ChassisInput read_input()
     input.wheel_speeds[i] = motors[i].speed;
     input.motors_ready = input.motors_ready && motors[i].is_alive(now_ms);
   }
+  // 与Mecanum默认轮向一致：左侧为正、右侧取反；角度已由中间件换算到轮侧。
+  input.forward_position = chassis_config::WHEEL_RADIUS * 0.25f *
+                           (motors[LEFT_FRONT].angle + motors[LEFT_REAR].angle -
+                            motors[RIGHT_FRONT].angle - motors[RIGHT_REAR].angle);
   input.remote_valid = remote.is_alive(now_ms);
   if (input.remote_valid) {
     input.right_switch = remote.sw_r;
@@ -119,10 +127,18 @@ bool control_ready(const ChassisInput & input)
          (!chassis_config::POWER_LIMIT_ENABLED || input.power_ready);
 }
 
-bool manual_control_ready(const ChassisInput & input)
+bool auto_heading_ready(const ChassisInput & input)
 {
-  return input.remote_valid && input.right_switch == sp::DBusSwitchMode::MID &&
-         control_ready(input);
+  return chassis_config::HEADING_HOLD_ENABLED && input.heading.valid &&
+         std::isfinite(input.heading.yaw) && std::isfinite(input.heading.yaw_rate);
+}
+
+bool motion_mode_ready(const ChassisInput & input, bool automatic)
+{
+  const bool mode_ready =
+    automatic ? input.right_switch == sp::DBusSwitchMode::UP && auto_heading_ready(input)
+              : input.right_switch == sp::DBusSwitchMode::MID;
+  return input.remote_valid && mode_ready && control_ready(input);
 }
 
 float filter_stick(float value)
@@ -249,10 +265,11 @@ void update_power_limit(const ChassisInput & input, WheelControlState & state)
 }
 
 // ---------- 观测数据 ----------
-// 通道顺序见plotter.cpp，串口发送由绘图任务完成。
+// 只提供本轮具名数据，通道排列和串口发送统一由plotter.cpp完成。
 void publish_plot_data(
   const float targets[WHEEL_COUNT], const ChassisInput & input, bool output_allowed,
-  uint32_t elapsed_ms, const HeadingControl & heading, const WheelControlState & wheel_control)
+  uint32_t elapsed_ms, const HeadingControl & heading, const WheelControlState & wheel_control,
+  const AutoDrive & automatic, float vx_command)
 {
   const auto power = power_meter.snapshot();
 
@@ -261,35 +278,29 @@ void publish_plot_data(
   const float requested_power = chassis_config::POWER_LIMIT_ENABLED && output_allowed
                                   ? wheel_control.power_limit.before_w
                                   : predicted_power;
-  const float budget_w = input.power_ready
-                           ? input.power_limit_w - chassis_config::POWER_MARGIN_W
-                           : 0.0f;
+  const float budget_w =
+    input.power_ready ? input.power_limit_w - chassis_config::POWER_MARGIN_W : 0.0f;
 
-  PlotData data = {
-    targets[LEFT_FRONT],
-    input.wheel_speeds[LEFT_FRONT],
-    targets[LEFT_REAR],
-    input.wheel_speeds[LEFT_REAR],
-    targets[RIGHT_FRONT],
-    input.wheel_speeds[RIGHT_FRONT],
-    targets[RIGHT_REAR],
-    input.wheel_speeds[RIGHT_REAR],
-    static_cast<float>(elapsed_ms),
-    output_allowed ? 1.0f : 0.0f,
-    wheel_commands[LEFT_FRONT],
-    wheel_commands[LEFT_REAR],
-    wheel_commands[RIGHT_FRONT],
-    wheel_commands[RIGHT_REAR],
-    power.online ? 1.0f : 0.0f,
-    requested_power,
-    budget_w,
-    power.power_w};
-  if constexpr (chassis_config::PLOT_HEADING) {
-    data[10] = input.heading.yaw;
-    data[11] = heading.target_yaw;
-    data[12] = input.heading.yaw_rate;
-    data[13] = heading.correction;
+  PlotSnapshot data;
+  for (int i = 0; i < WHEEL_COUNT; ++i) {
+    data.target_speed[i] = targets[i];
+    data.actual_speed[i] = input.wheel_speeds[i];
+    data.torque[i] = wheel_commands[i];
   }
+  data.elapsed_ms = elapsed_ms;
+  data.output_allowed = output_allowed;
+  data.power_online = power.online;
+  data.requested_power = requested_power;
+  data.power_budget = budget_w;
+  data.measured_power = power.power_w;
+  data.yaw = input.heading.yaw;
+  data.target_yaw = heading.target_yaw;
+  data.yaw_rate = input.heading.yaw_rate;
+  data.yaw_correction = heading.correction;
+  data.auto_distance = automatic.distance;
+  data.auto_target_distance = chassis_config::AUTO_DISTANCE_M;
+  data.forward_command = vx_command;
+  data.auto_phase = static_cast<float>(automatic.phase);
   update_plot_data(data);
 }
 
@@ -314,6 +325,15 @@ HAL_StatusTypeDef send_motor_commands(bool allowed)
 
 }  // namespace
 
+// ---------- 板间通信状态快照 ----------
+bool chassis_auto_complete()
+{
+  taskENTER_CRITICAL();
+  const bool complete = auto_complete;
+  taskEXIT_CRITICAL();
+  return complete;
+}
+
 // ---------- 底盘主任务 ----------
 extern "C" void chassis_task(void const * argument)
 {
@@ -327,24 +347,52 @@ extern "C" void chassis_task(void const * argument)
 
   WheelControlState wheel_control;
   HeadingControl heading_control;
+  AutoDrive automatic;
+  bool previous_auto_mode = false;
   float vx_command = 0.0f;
 
   while (true) {
     // 1. 输入快照与下档确认。
     const auto input = read_input();
-    const bool enabled = safety.update(
+    const bool auto_mode = input.right_switch == sp::DBusSwitchMode::UP;
+    bool enabled = safety.update(
       input.remote_valid, input.right_switch == sp::DBusSwitchMode::DOWN,
-      input.right_switch == sp::DBusSwitchMode::MID, control_ready(input));
+      input.right_switch == sp::DBusSwitchMode::MID || auto_mode,
+      control_ready(input) && (!auto_mode || auto_heading_ready(input)));
 
-    // 2. 遥控处理与四轮目标解算。
-    float forward = enabled ? filter_stick(input.forward) : 0.0f;
-    float right = enabled ? filter_stick(input.right) : 0.0f;
-    const float rotation = enabled ? filter_stick(input.rotation) : 0.0f;
+    // 手动/自动切换时清理旧命令，自动起步重新锁定当前航向。
+    if (auto_mode != previous_auto_mode) {
+      clear_speed_pids();
+      wheel_control = {};
+      heading_control = {};
+      vx_command = 0.0f;
+    }
+    previous_auto_mode = auto_mode;
+
+    bool all_stopped = true;
+    for (const float speed : input.wheel_speeds) {
+      all_stopped = all_stopped && std::isfinite(speed) &&
+                    std::abs(speed) <= chassis_config::STOPPED_WHEEL_SPEED;
+    }
+    const bool rearm = input.remote_valid && input.right_switch == sp::DBusSwitchMode::DOWN &&
+                       control_ready(input) && auto_heading_ready(input) && all_stopped;
+    const float auto_vx = update_auto_drive(
+      auto_mode, enabled, rearm, input.forward_position, all_stopped, HAL_GetTick(), automatic);
+    if (auto_mode && !auto_drive_active(automatic)) {
+      enabled = false;
+      if (automatic.phase == AutoDrivePhase::FAULT) safety.reset();
+    }
+
+    // 2. 中档遥控；上档由编码器测距生成前进命令，不读取摇杆运动指令。
+    float forward = enabled && !auto_mode ? filter_stick(input.forward) : 0.0f;
+    float right = enabled && !auto_mode ? filter_stick(input.right) : 0.0f;
+    const float rotation = enabled && !auto_mode ? filter_stick(input.rotation) : 0.0f;
     snap_stick_direction(forward, right);
 
     const float target_vx = forward * chassis_config::MAX_LINEAR_SPEED;
-    // 普通遥控使用速度过渡；失能立即清零，不经过斜坡。
-    vx_command = enabled ? smooth_forward_speed(target_vx, vx_command) : 0.0f;
+    // 自动模块已做速度规划，不再叠加遥控斜坡；失能立即清零。
+    vx_command =
+      enabled ? (auto_mode ? auto_vx : smooth_forward_speed(target_vx, vx_command)) : 0.0f;
     // 航向保持先修正角速度，之后仍统一经过轮速环与功率限制。
     const float wz_command = update_heading_control(
       rotation * chassis_config::MAX_ANGULAR_SPEED, input.heading, enabled, osKernelSysTick(),
@@ -361,7 +409,7 @@ extern "C" void chassis_task(void const * argument)
 
     // 5. 发送前复查，响应计算期间新到的下档或掉线。
     const auto latest = read_input();
-    bool output_allowed = enabled && manual_control_ready(latest);
+    bool output_allowed = enabled && motion_mode_ready(latest, auto_mode);
     if (enabled && !output_allowed) safety.reset();
     if (!output_allowed) {
       clear_speed_pids();
@@ -371,7 +419,8 @@ extern "C" void chassis_task(void const * argument)
       heading_control = {};
     }
 
-    if (send_motor_commands(output_allowed) != HAL_OK) {
+    const bool command_queued = send_motor_commands(output_allowed) == HAL_OK;
+    if (!command_queued) {
       safety.reset();
       clear_speed_pids();
       wheel_control.integral_weight = 1.0f;
@@ -382,13 +431,20 @@ extern "C" void chassis_task(void const * argument)
       HAL_CAN_AbortTxRequest(&hcan1, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2);
     }
 
+    // 到达终点并停稳后置位；退出上档、失联或运行条件失效时清零。
+    taskENTER_CRITICAL();
+    auto_complete = automatic.phase == AutoDrivePhase::COMPLETE && auto_mode && command_queued &&
+                    motion_mode_ready(latest, true);
+    taskEXIT_CRITICAL();
+
     // 6. 按观测周期发布快照，预测与CAN发送共用限幅后的转矩。
     const auto now_ms = osKernelSysTick();
     if (now_ms - last_plot_time >= chassis_config::PLOT_PERIOD_MS) {
       last_plot_time = now_ms;
 
       publish_plot_data(
-        targets, input, output_allowed, now_ms - plot_start_time, heading_control, wheel_control);
+        targets, input, output_allowed, now_ms - plot_start_time, heading_control, wheel_control,
+        automatic, vx_command);
     }
     osDelayUntil(&previous_wake_time, chassis_config::CONTROL_PERIOD_MS);
   }

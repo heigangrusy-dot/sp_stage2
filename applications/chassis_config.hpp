@@ -25,6 +25,18 @@ constexpr float STICK_AXIS_SNAP_RATIO = 0.20f;  // 小幅次轴输入吸附到�
 constexpr float FORWARD_ACCELERATION = 8.0f;
 constexpr float FORWARD_DECELERATION = 5.0f;
 
+// ---------- 上档自动直行 ----------
+// 下档停稳后切上档，只执行一次；距离由四轮编码器估算，打滑会产生误差。
+constexpr float AUTO_DISTANCE_M = 3.5f;
+constexpr float AUTO_SPEED_MPS = 0.5f;     // 首次验证速度，独立于遥控最高速度。
+constexpr float AUTO_ACCELERATION = 0.8f;  // m/s²。
+constexpr float AUTO_DECELERATION = 1.0f;  // m/s²，实际制动仍受功率和转矩约束。
+constexpr float AUTO_POSITION_KP = 2.0f;   // 末段距离误差m -> 目标速度m/s。
+constexpr float AUTO_STOP_TOLERANCE_M = 0.02f;
+constexpr uint32_t AUTO_STOP_SETTLE_MS = 200;
+constexpr uint32_t AUTO_TIMEOUT_MS = 20000;
+constexpr uint32_t AUTO_MAX_GAP_MS = 50;  // 自动过程中调度长时间中断则退出。
+
 // ---------- IMU航向保持 ----------
 // C板X朝左、Y朝后；水平安装时Z仍向上，顺时针Yaw减小，方向系数取+1。
 constexpr bool HEADING_HOLD_ENABLED = true;
@@ -38,7 +50,6 @@ constexpr float HEADING_SETTLE_RATE = 0.05f;     // 主动转弯结束后的停�
 constexpr uint32_t HEADING_SETTLE_MS = 150;
 constexpr uint32_t IMU_CALIBRATION_SAMPLES = 2000;  // 开机保持静止约2秒。
 constexpr uint32_t IMU_HEADING_TIMEOUT_MS = 50;
-constexpr bool PLOT_HEADING = false;  // 调试时11~14通道改为Yaw、目标Yaw、角速度、修正量。
 
 // ---------- 四轮速度环 ----------
 // 反馈为轮侧rad/s，输出和积分限幅为轮侧N·m。

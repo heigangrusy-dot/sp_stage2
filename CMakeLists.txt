@@ -53,6 +53,11 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     applications/control_safety.cpp
     applications/chassis_task.cpp
     applications/connect_task.cpp
+    applications/power_meter.cpp
+    applications/chassis_power.cpp
+    applications/heading_control.cpp
+    applications/pm02_task.cpp
+    applications/school_pm02.cpp
     sp_middleware/io/led/led.cpp
     sp_middleware/io/buzzer/buzzer.cpp
     sp_middleware/io/bmi088/bmi088.cpp
@@ -64,6 +69,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     sp_middleware/tools/pid/pid.cpp
     sp_middleware/tools/math_tools/math_tools.cpp
     sp_middleware/tools/mecanum/mecanum.cpp
+    sp_middleware/referee/pm02/pm02.cpp
+    sp_middleware/tools/crc/crc.cpp
 
 )
 

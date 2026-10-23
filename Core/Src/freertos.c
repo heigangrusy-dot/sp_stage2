@@ -54,6 +54,7 @@ osThreadId ImuTaskHandle;
 osThreadId RemoteTaskHandle;
 osThreadId ChassisTaskHandle;
 osThreadId ConnectTaskHandle;
+osThreadId Pm02TaskHandle;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -67,6 +68,7 @@ extern void imu_task(void const * argument);
 extern void remote_task(void const * argument);
 extern void chassis_task(void const * argument);
 extern void connect_task(void const * argument);
+extern void pm02_task(void const * argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -141,11 +143,16 @@ void MX_FREERTOS_Init(void) {
   osThreadDef(ConnectTask, connect_task, osPriorityNormal, 0, 128);
   ConnectTaskHandle = osThreadCreate(osThread(ConnectTask), NULL);
 
+  /* definition and creation of Pm02Task */
+  osThreadDef(Pm02Task, pm02_task, osPriorityBelowNormal, 0, 256);
+  Pm02TaskHandle = osThreadCreate(osThread(Pm02Task), NULL);
+
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* 绘图任务优先级低于底盘，放在用户区以便CubeMX重新生成时保留。 */
   osThreadDef(PlotterTask, plotter_task, osPriorityBelowNormal, 0, 256);
-  osThreadCreate(osThread(PlotterTask), NULL);
+  osThreadId plotter_handle = osThreadCreate(osThread(PlotterTask), NULL);
+  configASSERT(plotter_handle != NULL);
   /* USER CODE END RTOS_THREADS */
 
 }

@@ -140,7 +140,7 @@ void MX_FREERTOS_Init(void) {
   laserTaskHandle = osThreadCreate(osThread(laserTask), NULL);
 
   /* definition and creation of plotter_Task */
-  osThreadDef(plotter_Task, plotter_task, osPriorityIdle, 0, 128);
+  osThreadDef(plotter_Task, plotter_task, osPriorityLow, 0, 256);
   plotter_TaskHandle = osThreadCreate(osThread(plotter_Task), NULL);
 
   /* definition and creation of trajectoryTask */

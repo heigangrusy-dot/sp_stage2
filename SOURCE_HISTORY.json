@@ -1,0 +1,23 @@
+{
+  "chassis": {
+    "repository": "https://github.com/heigangrusy-dot/sp_stage2.git",
+    "branch": "stage2_chassis",
+    "imported_commit": "a10aa8de8df88f15505c336f5f649eece6239f39",
+    "included_worktree_changes": [
+      "applications/chassis_config.hpp",
+      "applications/chassis_task.cpp",
+      "applications/plotter.cpp",
+      "applications/plotter.hpp"
+    ],
+    "middleware_commit": "0d56d8417fad044f64b3d2e68151c8ec25a5b5b7"
+  },
+  "gimbal": {
+    "repository": "https://github.com/tj-zkd/RM_stage2.git",
+    "branch": "main",
+    "imported_commit": "862a5eab9ab1b31ad295d1f8c6bd96f3f74ce854",
+    "middleware_snapshot_source": "D:\\Study\\SP\\step2\\RM_stage2-main (3)\\RM_stage2-main\\sp_middleware"
+  },
+  "history": "Original commit IDs and authors retained as merge ancestors; history branches also retained.",
+  "middleware_upstream": "https://github.com/TongjiSuperPower/sp_middleware.git",
+  "status": "Local assembled repository; root README and GitHub destination pending."
+}

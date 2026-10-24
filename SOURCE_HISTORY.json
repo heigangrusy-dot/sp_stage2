@@ -15,15 +15,16 @@
     "repository": "https://github.com/tj-zkd/RM_stage2.git",
     "branch": "main",
     "imported_commit": "862a5eab9ab1b31ad295d1f8c6bd96f3f74ce854",
-    "middleware_snapshot_source": "D:\\Study\\SP\\step2\\RM_stage2-main (3)\\RM_stage2-main\\sp_middleware",
-    "middleware_snapshot_provisional": true
+    "middleware_snapshot_source": "D:\\Study\\SP\\sp_stage2\\sp_middleware",
+    "middleware_snapshot_provisional": true,
+    "middleware_commit": "0d56d8417fad044f64b3d2e68151c8ec25a5b5b7"
   },
   "history": "Original commit IDs and authors retained as merge ancestors; history branches also retained.",
   "middleware_upstream": "https://github.com/TongjiSuperPower/sp_middleware.git",
   "status": "Local combined repository; chassis build passed; gimbal build blocked by missing final CAN middleware; GitHub destination and README pending.",
   "verification": {
     "chassis": "Debug build passed, RAM 22616 bytes, FLASH 69272 bytes",
-    "gimbal": "Debug build failed: local archived CAN middleware lacks service() and rx_len required by latest gimbal commit",
+    "gimbal": "User-specified middleware verified: CAN files identical to previous snapshot; still lacks service() and rx_len required by gimbal 862a5ea; build remains blocked.",
     "hardware": "No flashing or hardware testing performed"
   }
 }

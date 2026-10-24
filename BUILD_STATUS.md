@@ -1,0 +1,24 @@
+# 交付整理验证状态
+
+本目录是本地整合预备仓库，尚未上传到新的GitHub仓库。
+
+- chassis/：底盘完整工程，已包含原工作区4个未提交文件的最终修改；Debug编译、链接通过。
+- gimbal/：取自同学GitHub主分支862a5ea。控制代码和历史完整保留，但仓库没有上传所需的sp_middleware。当前补入的是旧下载目录的中间件快照，尚非可确认的最终版本。
+- 云台Debug构建失败：sp::CAN缺少service()与rx_len。需从同学实际最终工程补齐对应CAN中间件；不应删掉调用来掩盖缺失依赖。
+- 两个原工程均未修改。两个工程分别构建、分别烧录到各自C板；本次未烧录或进行实车测试。
+- 根README和新GitHub仓库名称、可见性待确认。
+
+## 历史
+
+双方原始提交作为合并祖先保留，提交ID、作者、日期保持不变。history/chassis与history/gimbal分支指向导入时的原分支头。具体来源与提交号见SOURCE_HISTORY.json。
+
+## 构建
+
+分别进入chassis或gimbal目录，在配置好STM32CubeCLT工具链的环境执行：
+
+```powershell
+cmake --preset Debug
+cmake --build build/Debug
+```
+
+编译输出在各工程build/中，已忽略，不提交。补齐云台最终依赖后需要重新构建验证。

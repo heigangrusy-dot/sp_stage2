@@ -28,7 +28,7 @@ constexpr float FORWARD_DECELERATION = 5.0f;
 // ---------- 上档自动直行 ----------
 // 下档停稳后切上档，只执行一次；距离由四轮编码器估算，打滑会产生误差。
 constexpr float AUTO_DISTANCE_M = -3.8f;
-constexpr float AUTO_SPEED_MPS = -1.0f;    // 首次验证速度，独立于遥控最高速度。
+constexpr float AUTO_SPEED_MPS = -0.9f;    // 首次验证速度，独立于遥控最高速度。
 constexpr float AUTO_ACCELERATION = 0.8f;  // m/s²。
 constexpr float AUTO_DECELERATION = 1.0f;  // m/s²，实际制动仍受功率和转矩约束。
 constexpr float AUTO_POSITION_KP = 2.0f;   // 末段距离误差m -> 目标速度m/s。

@@ -2,7 +2,6 @@
 #define APPLICATIONS_PLOTTER_HPP
 
 #include <array>
-#include <cstdint>
 
 // 控制任务发布本轮观测快照；通道排列、模式切换和单位说明统一放在plotter.cpp。
 struct PlotSnapshot
@@ -11,10 +10,10 @@ struct PlotSnapshot
   std::array<float, 4> target_speed{};
   std::array<float, 4> actual_speed{};
   std::array<float, 4> torque{};
-  uint32_t elapsed_ms = 0;
   bool output_allowed = false;
 
   bool power_online = false;
+  float pm02_limit_w = 0.0f;
   float requested_power = 0.0f;
   float power_budget = 0.0f;
   float measured_power = 0.0f;

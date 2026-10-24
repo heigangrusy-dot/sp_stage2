@@ -68,6 +68,7 @@ struct ChassisInput
   bool motors_ready = false;
   bool can_ready = false;
   bool remote_valid = false;
+  float pm02_limit_w = 0.0f;
   float power_limit_w = 0.0f;
   bool power_ready = false;
   sp::DBusSwitchMode right_switch = sp::DBusSwitchMode::DOWN;
@@ -104,9 +105,9 @@ ChassisInput read_input()
                     HAL_CAN_GetError(&hcan1) == HAL_CAN_ERROR_NONE;
 
   // PM02上限、接收记录一起读取；计时与适配类统一使用HAL_GetTick。
-  input.power_limit_w = sp::limit_min_max(
-    static_cast<float>(pm02.robot_status.chassis_power_limit), 0.0f,
-    chassis_config::COMPETITION_POWER_LIMIT_W);
+  input.pm02_limit_w = static_cast<float>(pm02.robot_status.chassis_power_limit);
+  input.power_limit_w =
+    sp::limit_min_max(input.pm02_limit_w, 0.0f, chassis_config::COMPETITION_POWER_LIMIT_W);
   if constexpr (chassis_config::POWER_TEST_LIMIT_W > 0.0f) {
     if (input.power_limit_w > chassis_config::POWER_TEST_LIMIT_W) {
       input.power_limit_w = chassis_config::POWER_TEST_LIMIT_W;
@@ -268,7 +269,7 @@ void update_power_limit(const ChassisInput & input, WheelControlState & state)
 // 只提供本轮具名数据，通道排列和串口发送统一由plotter.cpp完成。
 void publish_plot_data(
   const float targets[WHEEL_COUNT], const ChassisInput & input, bool output_allowed,
-  uint32_t elapsed_ms, const HeadingControl & heading, const WheelControlState & wheel_control,
+  const HeadingControl & heading, const WheelControlState & wheel_control,
   const AutoDrive & automatic, float vx_command)
 {
   const auto power = power_meter.snapshot();
@@ -287,9 +288,10 @@ void publish_plot_data(
     data.actual_speed[i] = input.wheel_speeds[i];
     data.torque[i] = wheel_commands[i];
   }
-  data.elapsed_ms = elapsed_ms;
   data.output_allowed = output_allowed;
   data.power_online = power.online;
+  // 保留PM02原始上限；报文无效或超时时显示0，避免把旧值当作有效上限。
+  data.pm02_limit_w = input.power_ready ? input.pm02_limit_w : 0.0f;
   data.requested_power = requested_power;
   data.power_budget = budget_w;
   data.measured_power = power.power_w;
@@ -342,7 +344,6 @@ extern "C" void chassis_task(void const * argument)
   chassis_can.config();
   chassis_can.start();
   uint32_t previous_wake_time = osKernelSysTick();
-  const uint32_t plot_start_time = previous_wake_time;
   uint32_t last_plot_time = previous_wake_time;
 
   WheelControlState wheel_control;
@@ -443,8 +444,7 @@ extern "C" void chassis_task(void const * argument)
       last_plot_time = now_ms;
 
       publish_plot_data(
-        targets, input, output_allowed, now_ms - plot_start_time, heading_control, wheel_control,
-        automatic, vx_command);
+        targets, input, output_allowed, heading_control, wheel_control, automatic, vx_command);
     }
     osDelayUntil(&previous_wake_time, chassis_config::CONTROL_PERIOD_MS);
   }

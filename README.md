@@ -170,10 +170,3 @@ git log --all --graph --oneline --decorate
 
 GitHub的Commits页可以查看历史提交及其差异；合并前提交使用原项目根路径。由于整合时增加了chassis/gimbal前缀，单个文件的网页History不一定自动串起所有旧路径，必要时切换history分支查看原始路径。原仓库的Issues、PR、Actions及推送活动不属于Git提交历史，不随此次导入迁移。
 
-## 待完成的交付步骤
-
-1. 补齐云台实际使用的CAN中间件，并重新构建验证。
-2. 由两位负责人核对当前参数、串口输出及整机验证记录；需要改动时另作真实提交。
-3. 将第二阶段整合版发布到公开仓库sp_stage2的main，保留原stage2_chassis和历史归档分支；第一阶段继续单独保留在sptest。
-
-当前README描述的是本地交付预备目录。本次尚未上传整合版，也未将其烧录至实车。

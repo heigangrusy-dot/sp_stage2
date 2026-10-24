@@ -21,10 +21,16 @@
   },
   "history": "Original commit IDs and authors retained as merge ancestors; history branches also retained.",
   "middleware_upstream": "https://github.com/TongjiSuperPower/sp_middleware.git",
-  "status": "Local combined repository; chassis build passed; gimbal build blocked by missing final CAN middleware; GitHub destination and README pending.",
+  "status": "Local second-stage combined repository; README completed; chassis build passed; gimbal build blocked by missing matching CAN middleware; publication pending.",
   "verification": {
     "chassis": "Debug build passed, RAM 22616 bytes, FLASH 69272 bytes",
     "gimbal": "User-specified middleware verified: CAN files identical to previous snapshot; still lacks service() and rx_len required by gimbal 862a5ea; build remains blocked.",
     "hardware": "No flashing or hardware testing performed"
+  },
+  "planned_destination": {
+    "repository": "https://github.com/heigangrusy-dot/sp_stage2",
+    "visibility": "public",
+    "branch": "main",
+    "first_stage_repository": "https://github.com/heigangrusy-dot/sptest"
   }
 }
